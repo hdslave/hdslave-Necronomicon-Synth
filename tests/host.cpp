@@ -1043,6 +1043,32 @@ void testExtremes()
     }
 }
 
+// A press on the page counts where the same button from the host at the block's first frame does: before the
+// transport, so Next pressed on the page as Play starts mid-song does what Next sent with Play does (the song's place
+// wins), whichever way it came.
+void testPressWithPlay()
+{
+    auto run = [] (bool fromPage) {
+        Instance a;
+        CHECK (a.loadPreset ("polyrhythm-bass"));
+        std::vector<float> l, r;
+        a.render (128 * 8, 128, l, r, [] (uint64_t) { return Transport { false, 120.0, 0.0 }; });
+        if (fromPage)
+        {
+            const auto* screen = static_cast<const clap_plugin_melodee_screen*> (a.plugin->get_extension (a.plugin, CLAP_EXT_MELODEE_SCREEN));
+            for (const melodee_screen_input_t e : { melodee_screen_input_t { MELODEE_SCREEN_NUDGE, 1, false },
+                                                     melodee_screen_input_t { MELODEE_SCREEN_WHEEL, 4, false },
+                                                     melodee_screen_input_t { MELODEE_SCREEN_PUSH, 0, false } })
+                CHECK (screen->input (a.plugin, &e));
+        }
+        a.render (48000, 128, l, r, [] (uint64_t at) { return playingFrom (2.5, 120.0, 48000.0, at); },
+                  [&] (uint64_t at, uint32_t, Events& e) { if (! fromPage && at == 0) a.set (e, "Next", 1.0); });
+        return l;
+    };
+    const auto page = run (true), host = run (false);
+    CHECK (! page.empty() && page == host);
+}
+
 void testScreen()
 {
     Instance a;
@@ -1229,6 +1255,7 @@ int main (int argc, char** argv)
     }
     factory = static_cast<const clap_plugin_factory*> (entry->get_factory (CLAP_PLUGIN_FACTORY_ID));
     testScreen();
+    testPressWithPlay();
     testDescription();
     testParameters();
     testState();

@@ -515,6 +515,8 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
     const uint32_t lastFrame = frames > 0 ? frames - 1 : 0;
     for (; next < count && in->get (in, next)->time == 0; ++next)
         handle (p, in->get (in, next), process->out_events, lastFrame);
+    // The page's presses (if fresh) count as the host's buttons at the first frame do: before the transport.
+    takePresses (p);
 
     // The host's transport. Without a song position (Melodee always sends one), the sequencers count their own from
     // Play, so the first clock is the one Play lands on.
@@ -529,7 +531,6 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
     else
         p.engine.transport (false, 0.0, 120.0, frames);
 
-    takePresses (p);
     uint32_t done = 0;
     while (done < frames)
     {
