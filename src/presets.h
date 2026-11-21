@@ -87,8 +87,6 @@ inline const Preset presetTable[] = {
     NECRONOMICON_PRESET ("Hold Drone", "hold-drone", presetValues::holdDrone),
 };
 #undef NECRONOMICON_PRESET
-constexpr uint32_t presetCount = sizeof (presetTable) / sizeof (presetTable[0]);
-
 inline const Preset* findPreset (const char* key)
 {
     if (key == nullptr)

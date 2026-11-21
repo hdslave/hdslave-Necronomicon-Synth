@@ -10,7 +10,7 @@
 #include <strings.h>
 
 #ifndef NECRONOMICON_VERSION
-#define NECRONOMICON_VERSION "0.1.0"
+#define NECRONOMICON_VERSION "0.1.1"
 #endif
 
 namespace necronomicon
@@ -223,7 +223,8 @@ inline void formatParam (const Param& p, float v, char* text, uint32_t size, flo
     };
     switch (p.unit)
     {
-        case Unit::vcoHz: hz (vcoHz (v)); break;
+        // A VCO's pitch to the hertz above 1 kHz (two cents at the most), where kilohertz to two places lose 9 cents.
+        case Unit::vcoHz: if (vcoHz (v) < 1000.0f) hz (vcoHz (v)); else std::snprintf (text, size, "%.0f Hz", vcoHz (v)); break;
         case Unit::cutoffHz: hz (cutoffHz (v)); break;
         case Unit::attack: time (attackSeconds (v)); break;
         case Unit::decay: time (decaySeconds (v)); break;

@@ -377,7 +377,7 @@ struct Decimator
         constexpr int len = 2 * half;
         odd[at] = odd[at + len] = b;
         even[evenAt] = a;
-        quiet = (a == 0.0f && b == 0.0f) ? quiet + 1 : 0;
+        quiet = (a == 0.0f && b == 0.0f) ? std::min (quiet + 1, 2 * half + 1) : 0; // held at silent(): never overflows
         const float* w = odd + at + 1; // w[0] .. w[len-1]: b[m-len+1] .. b[m]
         float sum = 0.0f;
         for (int i = 0; i < half; ++i)
@@ -416,10 +416,15 @@ public:
         filter = Ladder {};
         decimator.clear();
         mixHeld = 0.0f;
+        dtFrom[0] = dtFrom[1] = gainFrom = std::nanf (""); // nothing worked out yet (and the rate may have changed)
         tick = 0;
-        playing = regridWanted = false;
+        playing = regridWanted = resetWanted = false;
         lastClock = -1;
         origin = 0;
+        countedGrid = clockBeats();
+        now = 0;
+        clockedAt = -(int64_t (1) << 40); // no clock played yet
+        clockedLoud = false;
         for (int s = 0; s < 2; ++s)
             step[s] = 0, fresh[s] = true;
         held = 0;
@@ -454,8 +459,7 @@ public:
         {
             for (int s = 0; s < 2; ++s)
                 step[s] = 0, fresh[s] = true;
-            if (playing)
-                origin = lastClock + 1;
+            resetWanted = playing; // the generators count again from the next clock (on the grid it falls on)
             snapPitch();
         }
         else if (id == ParamId::next)
@@ -517,9 +521,14 @@ public:
             playing = false;
             return;
         }
-        // A Play, or a place other than where the last block ended (a jump, a loop going round): line up again.
-        if (! playing || std::fabs (beats - position) > 0.5 * perFrame)
-            relocate (beats, window);
+        // A Play, or a place other than where the last block ended by more than a block (a jump, a loop going
+        // round): line up again. Less than that is drift (a tempo change inside the last block), followed as it is:
+        // the clocks already played are not played again, one passed is played at once.
+        const double moved = std::fabs (beats - position);
+        if (! playing)
+            relocate (beats, window, false);
+        else if (moved > 0.5 * perFrame && moved >= window * perFrame)
+            relocate (beats, window, true);
         playing = true;
         position = beats;
     }
@@ -546,6 +555,7 @@ public:
                     run = (uint32_t) untilClock;
             }
             sound (left, right, run);
+            now += run;
             if (playing)
                 position += run * perFrame;
             left += run;
@@ -554,9 +564,6 @@ public:
             frames -= run;
         }
     }
-
-    // For the tests: the step (0-3) each sequencer is on.
-    int stepOf (int s) const { return step[s & 1]; }
 
 private:
     // --- Sequencers ---
@@ -579,6 +586,9 @@ private:
     // first after a Play, a jump or Reset playing the step it is on; then the EGs start (EG: On).
     void clock (int64_t k)
     {
+        if (resetWanted)
+            origin = k, resetWanted = false;
+        clockedAt = (int64_t) now, clockedLoud = false;
         const int64_t n = k - origin;
         if (knob[ParamId::run] < 0.5f || n < 0)
             return;
@@ -596,19 +606,43 @@ private:
             return;
         snapPitch();
         if (egMode() == 1)
-            vcfEg.trigger(), vcaEg.trigger();
+            vcfEg.trigger(), vcaEg.trigger(), clockedLoud = true;
     }
 
-    void relocate (double beats, double window)
+    void relocate (double beats, double window, bool jumped)
     {
         const double grid = clockBeats();
         const int64_t b = (int64_t) std::floor (beats / grid + 1.0e-9);
-        // Just past a clock (less than a block: a loop's wrap inside the last block, a Play landing a hair late):
-        // that clock plays at once; further in, the next clock is the first.
-        const double late = (beats - (double) b * grid) / perFrame;
-        lastClock = b - (late < window ? 1 : 0);
+        const double late = (beats - (double) b * grid) / perFrame; // frames since the host's clock b
         origin = 0;
-        regridWanted = false;
+        regridWanted = resetWanted = false;
+        countedGrid = grid;
+        // A jump whose clock b fell on the very frame a clock played here: a loop gone round inside a block (the host
+        // tells only at the next one, so the clocks ran on past the loop's end; its end is its start). That clock
+        // was b: the steps line up with b, and the EGs are not started again, unless the clock played then started
+        // nothing and b does.
+        if (jumped && std::fabs ((double) ((int64_t) now - clockedAt) - late) <= 2.0)
+        {
+            lastClock = b;
+            if (knob[ParamId::run] < 0.5f)
+                return;
+            bool sounds = false;
+            for (int s = 0; s < 2; ++s)
+            {
+                const Routing r = routing (s);
+                const int64_t c = pulsesUpTo (r, b);
+                fresh[s] = c == 0;
+                step[s] = c == 0 ? 0 : (int) ((c - 1) & 3);
+                sounds |= b >= 0 && pulseAt (r, b);
+            }
+            snapPitch();
+            if (sounds && ! clockedLoud && egMode() == 1)
+                vcfEg.trigger(), vcaEg.trigger(), clockedLoud = true;
+            return;
+        }
+        // Just past a clock (less than a block: a Play landing a hair late, a wrap seen early enough): that clock
+        // plays at once; further in, the next clock is the first.
+        lastClock = b - (late < window ? 1 : 0);
         if (knob[ParamId::run] < 0.5f) // stopped by Run, the sequencers hold their steps through the host's moves
             return;
         // The steps the song's place puts each sequencer on, as if it had played from the top.
@@ -621,11 +655,16 @@ private:
         snapPitch();
     }
 
-    // Clock Div changed: count clocks on the new grid from here, without a burst of them.
+    // Clock Div changed: count clocks on the new grid from here, without a burst of them. A clock of the new grid
+    // due on this frame (in the last frame's time) still plays; a Reset keeps its moment: the generators count from
+    // the first clock of the new grid at or after it.
     void regrid()
     {
-        lastClock = (int64_t) std::floor (position / clockBeats() + 1.0e-9);
-        origin = 0;
+        const double grid = clockBeats();
+        lastClock = (int64_t) std::floor ((position - perFrame * (1.0 - clockSlack)) / grid + 1.0e-9);
+        if (origin != 0)
+            origin = (int64_t) std::ceil ((double) origin * countedGrid / grid - 1.0e-9);
+        countedGrid = grid;
         regridWanted = false;
     }
 
@@ -763,18 +802,21 @@ private:
             return 0.0f;
         const float eVca = vcaEg.next();
         // The two VCOs and their subs, summed at their levels; the sum runs a sample behind, finished by the edges'
-        // corrections.
-        const float dt1 = clampf (exp2Fast (smooth[pitch1]) * invInner, 1.0e-6f, maxDt);
-        const float dt2 = clampf (exp2Fast (smooth[pitch2]) * invInner, 1.0e-6f, maxDt);
+        // corrections. A VCO's increment, and the filter's gain below, are worked out again only when what they come
+        // from moves (the pitch eases only every 8 frames; the cutoff stands still while the VCF EG rests or holds).
+        for (int n = 0; n < 2; ++n)
+            if (smooth[pitch1 + n] != dtFrom[n])
+                dtFrom[n] = smooth[pitch1 + n], dt[n] = clampf (exp2Fast (dtFrom[n]) * invInner, 1.0e-6f, maxDt);
         float before = 0.0f, now = 0.0f;
-        const float sum = stepVco (vco[0], wave[0], dt1, &smooth[level1], before, now) + stepVco (vco[1], wave[1], dt2, &smooth[level2], before, now);
+        const float sum = stepVco (vco[0], wave[0], dt[0], &smooth[level1], before, now) + stepVco (vco[1], wave[1], dt[1], &smooth[level2], before, now);
         const float out = mixHeld + before;
         mixHeld = sum + now;
         // The mixer: six levels into one stage that overdrives when they are all up.
         const float mix = tanhFast (0.75f * out);
         // The ladder, its cutoff moved by the VCF EG.
-        const float hz = exp2Fast (smooth[cut] + eVcf * smooth[vcfAmt]);
-        const float G = onePoleGain (clampf ((float) M_PI * hz * invInner, 0.0005f, 1.2f));
+        const float octaves = smooth[cut] + eVcf * smooth[vcfAmt];
+        if (octaves != gainFrom)
+            gainFrom = octaves, G = onePoleGain (clampf ((float) M_PI * exp2Fast (octaves) * invInner, 0.0005f, 1.2f));
         const float y = filter.process (mix, G, smooth[res]);
         // The VCA (its EG) and Volume; the soft ceiling follows the decimator.
         return y * eVca * smooth[gain] * 1.6f;
@@ -786,13 +828,18 @@ private:
     float knob[ParamId::count] {};
     float target[smoothed] {}, smooth[smoothed] {};
     float mixHeld = 0.0f, transpose = 0.0f;
+    float dt[2] {}, dtFrom[2] {}, G = 0.0f, gainFrom = 0.0f; // the VCOs' increments and the filter's gain, and what they came from
     int wave[2] {};
-    bool playing = false, regridWanted = false, dirty = true, moving = false, gated = false;
+    bool playing = false, regridWanted = false, resetWanted = false, dirty = true, moving = false, gated = false;
+    bool clockedLoud = false; // the last clock played started the EGs
     bool fresh[2] { true, true };
     int step[2] {};
     int keys[maxHeld] {};
     int held = 0;
     int64_t lastClock = -1, origin = 0;
+    double countedGrid = 0.25;          // the grid lastClock and origin count on
+    uint64_t now = 0;                   // frames rendered since prepare()
+    int64_t clockedAt = 0;              // the frame the last clock played on
     uint32_t tick = 0, lastBlock = 0;
     Envelope vcfEg, vcaEg;
     Vco vco[2];

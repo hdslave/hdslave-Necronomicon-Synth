@@ -89,11 +89,17 @@ same samples as the demo's list.
 - Play from the top starts on its first frame; each later clock lands on its frame. A Play or a jump places both
   sequencers by the song's place: the steps the generators would have reached from the top.
 - Stop stops the clock (sounds ring out; EG: Hold keeps droning). A jump, or a loop going round, lines everything up
-  with the song's place again. A wrap that falls inside a block still plays that clock, at the start of the next block
-  (at most a block late: 2.7 ms at 128 frames).
+  with the song's place again. A Play or jump landing just past a clock (within a block) plays that clock at once.
+- A loop that wraps inside a block is told only at the next block (Melodee tells the song's place at its own blocks,
+  even when it plays a plug-in in smaller parts), so the clocks run on to the loop's end, which is its start: the
+  clock played there stands for the downbeat. When the host tells, the steps line up with the song and the EGs are
+  not started twice; a downbeat the loop's end left silent plays then, at most a block late (2.7 ms at 128 frames).
+- A tempo change inside a block moves the host's place a few frames from where the clock counted: followed as it is,
+  no clock played twice, a clock passed played at once.
+- Clock Div changed while playing: the clocks count on the new grid from there; one due on that frame plays.
 - Run off: the host plays but the sequencers hold their steps and nothing fires; Next, Reset and Trigger work as on
-  the panel. Reset while playing restarts the generators from the next clock, until the next Play or jump lines them
-  up with the song again.
+  the panel. Reset while playing restarts the generators from the next clock (a Clock Div change after it keeps that
+  moment), until the next Play or jump lines them up with the song again.
 - In Melodee, keep the plug-in's **TRANSPORT** on (the default): with it off the plug-in never hears Play.
 
 ## Where values were inferred
@@ -116,8 +122,8 @@ are chosen to match what is documented:
 - A trigger during a decay starts the attack from where the envelope is.
 - The mixer's overdrive: one soft-clipping stage after the six levels (squared tapers).
 
-Deviations: Trigger is a trigger in every EG mode (a plug-in button cannot be held, so EG: Off's gate is left to MIDI
-notes, which hold the EGs as a gate does); notes carry no velocity, as on the panel.
+Deviations: Trigger is a trigger in EG: Off as in On (on the panel it is a gate there; a plug-in button cannot be
+held, so the gate is left to MIDI notes, which hold the EGs as a gate does); notes carry no velocity, as on the panel.
 
 Left out on purpose: the patch bay, the external clock, MIDI CCs, the PWM input and the SEQ OCT / QUANTIZE output
 settings (there are no outputs), and the panel's TEMPO (the clock is the host's; 1/64 is the fastest).
@@ -131,12 +137,15 @@ harmonics, each output stays 45 dB or more below them at 1 and 3 kHz (`tests/uni
 
 | Case | Instructions | Share of one A55 core at 1 instruction a cycle |
 |---|---|---|
-| Everything busy (all six oscillators sounding, the pulse width swept, a high VCO, the sequencers on the subs, resonance, EG: Hold) | about 90,000 | 1.9 % |
-| The default pattern with a shorter decay | about 41,000 | 0.9 % |
+| Everything busy (all six oscillators sounding, the pulse width swept, a high VCO, the sequencers on the subs, resonance, EG: Hold) | about 79,000 | 1.6 % |
+| The default pattern with a shorter decay | about 40,000 | 0.8 % |
 | Stopped | under 600 | 0.01 % |
 
-While the VCA is closed between hits the oscillators and filter are skipped. The real share on the MPC depends on
-how many instructions the A55 retires a cycle on this code; measure it with Melodee's plug-in load figure.
+While the VCA is closed between hits the oscillators and filter are skipped. A VCO's increment and the filter's
+gain are worked out again only when what they come from moves (the pitch eases only every 8 frames; the cutoff
+stands still while the VCF EG rests or holds): an eighth less in the busy case, the same output to the bit. The
+real share on the MPC depends on how many instructions the A55 retires a cycle on this code; measure it with
+Melodee's plug-in load figure.
 
 ## Build and test
 
@@ -145,6 +154,7 @@ Needs Docker with a Linux arm64 context (Melodee's `colima-melodee` and its `mel
 ```sh
 ./build.sh          # build/Necronomicon.clap, then the tests, the sound's fingerprint and demo renders build/demo-*.wav
 ./build.sh bench    # build/bench
+./build.sh sanitize # the unit and host tests against a build with AddressSanitizer and UBSan (build/san/)
 tools/bench.sh      # instruction counts (Melodee's melodee-profiler image)
 ```
 
@@ -156,15 +166,19 @@ random pitch changes and divisor changes, and every output's aliasing.
 text and default (the steps' text following Seq Oct, the host asked to read it again); state save and load; the
 presets as preset discovery lists them and preset-load loads them; clock timing to the frame at 44.1, 48 and 96 kHz
 and two tempos; 3 against 4 across the sequencers, OR and XOR on one; a generator routed nowhere, Run off; stop,
-restart, jumps, a loop wrapping inside a block, a host without a song position, the steps placed by the song's place;
+restart, jumps, a host without a song position, the steps placed by the song's place, a count-in from beat -1; a loop
+wrapping inside a block and told a block late (one hit on the downbeat, not two; a downbeat the loop's end left
+silent still played, in whole blocks and in Melodee's smaller parts), a tempo change inside a block, Clock Div changed
+on a downbeat, Reset and Clock Div in one block;
 the same output whatever the block size (1, 37, 128, 4096 frames); the VCO range, each quantizer, Fine Tune; Next,
 Reset, the steps on the VCO and on a sub's divisor, a sub following its VCO, Seq 2 on VCO 2, each wave's pitch;
-EG Off with Trigger, EG Hold and back, notes (CLAP, MIDI, a choke) gating the EGs and moving the pitch, Reset while
-playing; and finite, bounded output at 60 random and extreme settings.
+EG Off with Trigger, EG Hold and back, notes (CLAP, MIDI, a choke, a note off for any key) gating the EGs and moving
+the pitch, Reset while playing; a preset loaded while playing heard exactly as its values sent as events; and finite,
+bounded output at 60 random and extreme settings, never stuck at the ceiling (what a NaN inside would give).
 
-`tests/fingerprint.cpp` then renders 45 fixed scenarios (each preset, the bench's patches, 24 random patches with the
+`tests/fingerprint.cpp` then renders 47 fixed scenarios (each preset, the bench's patches, 24 random patches with the
 buttons, notes and knobs moving, other block sizes and rates, stop and jumps, each quantizer and wave, notes while it
-plays, XOR switched while it plays) and hashes every output sample's bits against `tests/fingerprint.txt`: work
+plays, XOR switched while it plays, a loop wrapping inside a block in whole blocks and in parts) and hashes every output sample's bits against `tests/fingerprint.txt`: work
 meant to keep the sound, such as a speed-up, must leave every hash as it is. A change meant to change the sound
 updates them with `make fingerprint-update` (run inside the build image). The hashes hold for Melodee's build image
 and these compiler flags.

@@ -101,6 +101,7 @@ struct Transport
 {
     bool playing = true;
     double bpm = 120.0, beats = 0.0;
+    bool placed = true; // the host gives a song position (it may be negative: a count-in)
 };
 const Transport stopped { false, 120.0, 0.0 };
 
@@ -189,7 +190,7 @@ struct Instance
             const auto t = transport (at);
             clap_event_transport tr {};
             tr.header = { sizeof (clap_event_transport), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_TRANSPORT, 0 };
-            tr.flags = CLAP_TRANSPORT_HAS_TEMPO | (t.beats >= 0.0 ? CLAP_TRANSPORT_HAS_BEATS_TIMELINE : 0) | (t.playing ? CLAP_TRANSPORT_IS_PLAYING : 0);
+            tr.flags = CLAP_TRANSPORT_HAS_TEMPO | (t.placed ? CLAP_TRANSPORT_HAS_BEATS_TIMELINE : 0) | (t.playing ? CLAP_TRANSPORT_IS_PLAYING : 0);
             tr.tempo = t.bpm;
             tr.song_pos_beats = (clap_beattime) std::llround (t.beats * (double) CLAP_BEATTIME_FACTOR);
             Events e;
@@ -380,7 +381,8 @@ void testParameters()
                               "Rhythm 1 > Seq 1", "Rhythm 4 > Seq 2", "Rhythm Logic", "Clock Div", "Run", "Reset", "Next", "Trigger", "Fine Tune" })
         CHECK (a.ids.count (name) == 1);
     // The panel's ranges, as text.
-    CHECK (a.text ("VCO 1 Freq", 0.0) == "261.6 Hz" && a.text ("VCO 1 Freq", 1.0) == "4.19 kHz");
+    CHECK (a.text ("VCO 1 Freq", 0.0) == "261.6 Hz" && a.text ("VCO 1 Freq", 1.0) == "4186 Hz");
+    CHECK (std::fabs (a.valueOf ("VCO 1 Freq", "1047 Hz") - 0.5) < 2e-4); // to the hertz: about 0.2 cent here
     CHECK (a.text ("VCO 1 Sub 1", 16.0) == "1/16" && a.valueOf ("VCO 1 Sub 1", "1/5") == 5.0 && a.valueOf ("VCO 1 Sub 1", "7") == 7.0);
     CHECK (a.text ("VCF Attack", 0.0) == "1.0 ms" && a.text ("VCF Attack", 0.05) == "1.6 ms" && a.text ("VCF Attack", 1.0) == "10.00 s");
     CHECK (a.text ("VCA Decay", 0.0) == "5.0 ms" && a.text ("VCA Decay", 0.4) == "105 ms" && a.text ("VCA Decay", 1.0) == "10.00 s");
@@ -530,18 +532,28 @@ void testPresets()
         a.params->get_value (a.plugin, info.id, &v);
         CHECK (v == info.default_value);
     }
-    // Loaded while playing: the next block plays it (here, Hold Drone's 1/8 clock instead of the 1/32 just set).
-    std::vector<float> l, r;
-    Instance b;
-    b.setup ({ { "Clock Div", b.valueOf ("Clock Div", "1/32") } });
+    // Loaded while playing: the next block plays it, exactly as if each value had come as an event at that block's
+    // first frame (here Hold Drone and its 1/8 clock, over the 1/32 set before).
+    std::vector<float> l, r, l2, r2;
+    Instance b, c;
+    for (Instance* i : { &b, &c })
+        i->setup ({ { "Clock Div", i->valueOf ("Clock Div", "1/32") } });
     auto t = [] (uint64_t at) { return playingFrom (0.0, 120.0, 48000.0, at); };
     b.render (128, 128, l, r, t);
+    c.render (128, 128, l2, r2, t);
     CHECK (b.loadPreset ("hold-drone") && b.value ("Clock Div") == b.valueOf ("Clock Div", "1/8"));
-    b.render (48000, 128, l, r, t);
-    bool finite = true;
-    for (float s : l)
-        finite &= std::isfinite (s);
-    CHECK (finite && rms (l, 24000, 24000) > 0.01);
+    auto later = [] (uint64_t at) { return playingFrom (128.0 / 24000.0, 120.0, 48000.0, at); };
+    b.render (96000, 128, l, r, later);
+    c.render (96000, 128, l2, r2, later, [&] (uint64_t at, uint32_t, Events& e) {
+        if (at == 0)
+            for (uint32_t i = 0; i < c.params->count (c.plugin); ++i)
+            {
+                clap_param_info info {};
+                c.params->get_info (c.plugin, i, &info);
+                e.param (0, info.id, b.value (info.name)); // (the buttons at 0: no press)
+            }
+    });
+    CHECK (l == l2 && rms (l, 24000, 24000) > 0.01);
 }
 
 void testTiming()
@@ -687,10 +699,10 @@ void testStopRestartJump()
     hits = onsets (l);
     CHECK (std::find_if (hits.begin(), hits.end(), [&] (long h) { return h >= (long) wrap && h < (long) wrap + 48; }) != hits.end());
 
-    // A host with no song position (beats < 0 here: the flag left out): the clocks count from Play itself.
+    // A host with no song position (the flag left out): the clocks count from Play itself.
     Instance d;
     d.setup (clickPatch (d));
-    d.render (48000 * 2, 128, l, r, [] (uint64_t) { return Transport { true, 120.0, -1.0 }; });
+    d.render (48000 * 2, 128, l, r, [] (uint64_t) { return Transport { true, 120.0, 0.0, false }; });
     hits = onsets (l);
     CHECK (hits.size() == 8);
     for (size_t i = 2; i < hits.size(); ++i)
@@ -703,6 +715,99 @@ void testStopRestartJump()
     e.render (48000, 128, l, r, [] (uint64_t at) { return playingFrom (2.2, 120.0, 48000.0, at); });
     if (debug) std::printf ("debug jump: %.1f %.1f\n", hz (l, 0.05, 0.35), hz (l, 0.45, 0.85));
     CHECK (near (hz (l, 0.05, 0.35), g5, 0.005) && near (hz (l, 0.45, 0.85), c4, 0.005));
+}
+
+// One hit at `at` and no second one on its tail (a doubled clock, a "flam"): the peak over the 400 frames after the
+// first 150 stays well under the hit's own.
+bool singleHit (const std::vector<float>& l, long at)
+{
+    float first = 0.0f, after = 0.0f;
+    for (long i = at; i < at + 100; ++i) first = std::max (first, std::fabs (l[(size_t) i]));
+    for (long i = at + 150; i < at + 550; ++i) after = std::max (after, std::fabs (l[(size_t) i]));
+    if (debug) std::printf ("debug hit at %ld: %.4f then %.4f\n", at, first, after);
+    return first > 0.05f && after < 0.2f * first;
+}
+
+void testLoopsAndClockChanges()
+{
+    std::vector<float> l, r;
+    // A 4-beat loop at 110 BPM whose end falls inside a block (frame 104,727.3), the host telling of the wrap only at
+    // the next block as Melodee does: the clocks run on to the loop's end, which is its start.
+    constexpr double perFrame = 110.0 / 60.0 / 48000.0, loopEnd = 4.0 / perFrame;
+    auto looping = [] (uint64_t at) { return Transport { true, 110.0, std::fmod ((double) at * perFrame, 4.0) }; };
+    // Every clock plays (Rhythm 1 at 1): the downbeat is one hit, not the loop's end and then the loop's start again.
+    {
+        Instance a;
+        a.setup (clickPatch (a, { { "Clock Div", a.valueOf ("Clock Div", "1/16") } }));
+        a.render ((uint32_t) loopEnd + 24000, 128, l, r, looping);
+        CHECK (singleHit (l, (long) loopEnd + 1));
+        const auto hits = onsets (l);
+        CHECK (std::count_if (hits.begin(), hits.end(), [] (long h) { return h > loopEnd - 100 && h < loopEnd + 6000; }) == 1);
+    }
+    // Rhythm 1 at 3: the clock at the loop's end (the 16th) plays nothing, but the downbeat does: it plays when the
+    // host tells of the wrap, at most a block late. The same when the host's blocks come in parts smaller than that
+    // (Melodee plays a plug-in in parts between its steps, and tells the song's place only at its own blocks).
+    for (uint32_t part : { 128u, 32u })
+    {
+        Instance a;
+        a.setup (clickPatch (a, { { "Clock Div", a.valueOf ("Clock Div", "1/16") }, { "Rhythm 1", 3 } }));
+        auto parts = [] (uint64_t at) {
+            const uint64_t block = at / 128 * 128; // Melodee's block: the place at its start, counted on through it
+            return Transport { true, 110.0, std::fmod ((double) block * perFrame, 4.0) + (double) (at - block) * perFrame };
+        };
+        a.render ((uint32_t) loopEnd + 24000, part, l, r, parts);
+        const auto hits = onsets (l);
+        const auto down = std::find_if (hits.begin(), hits.end(), [] (long h) { return h > loopEnd - 100; });
+        if (debug) std::printf ("debug wrap part %u: %ld\n", part, down == hits.end() ? -1L : *down);
+        CHECK (down != hits.end() && *down >= (long) loopEnd && *down < (long) loopEnd + 128 + 60 && singleHit (l, *down - 10));
+    }
+    // Drift: a tempo change inside a block (120 to 125 BPM, 64 frames before the next block) moves the host's place a
+    // few frames from where the clocks counted: the clock played 64 frames ago is not played again, the next comes at
+    // the new tempo.
+    {
+        Instance a;
+        a.setup (clickPatch (a, { { "Clock Div", a.valueOf ("Clock Div", "1/16") } }));
+        a.render (48000, 128, l, r, [] (uint64_t at) {
+            if (at < 24064) return playingFrom (0.0, 120.0, 48000.0, at);
+            return Transport { true, 125.0, 1.0 + (double) (at - 24000) * 125.0 / 60.0 / 48000.0 };
+        });
+        CHECK (singleHit (l, 24000));
+        const auto hits = onsets (l);
+        CHECK (std::find_if (hits.begin(), hits.end(), [] (long h) { return std::labs (h - (24000 + 5760 + 10)) <= 3; }) != hits.end());
+    }
+    // Clock Div changed on a downbeat while playing (1/16 to 1/8 at beat 2): that downbeat still plays.
+    {
+        Instance a;
+        a.setup (clickPatch (a, { { "Clock Div", a.valueOf ("Clock Div", "1/16") } }));
+        a.render (96000, 128, l, r, [] (uint64_t at) { return playingFrom (0.0, 120.0, 48000.0, at); }, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 48000) a.set (e, "Clock Div", a.valueOf ("Clock Div", "1/8"));
+        });
+        const auto got = clocksOf (onsets (l), 6000);
+        if (debug) { std::printf ("debug regrid:"); for (long c : got) std::printf (" %ld", c); std::printf ("\n"); }
+        CHECK ((got == std::vector<long> { 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14 }));
+    }
+    // Reset and a Clock Div change in one block: the generators restart from the next clock of the new grid. Rhythm 1
+    // at 4: sixteenths 0 and 4 (frames 0 and 24,000), Reset and 1/8 at frame 30,720, then eighths 3 and 7 (36,000
+    // and 84,000).
+    {
+        Instance a;
+        a.setup (clickPatch (a, { { "Clock Div", a.valueOf ("Clock Div", "1/16") }, { "Rhythm 1", 4 } }));
+        a.render (100000, 128, l, r, [] (uint64_t at) { return playingFrom (0.0, 120.0, 48000.0, at); }, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 240) a.set (e, "Reset", 1.0), a.set (e, "Clock Div", a.valueOf ("Clock Div", "1/8"));
+        });
+        const auto got = clocksOf (onsets (l), 6000);
+        if (debug) { std::printf ("debug reset regrid:"); for (long c : got) std::printf (" %ld", c); std::printf ("\n"); }
+        CHECK ((got == std::vector<long> { 0, 4, 6, 14 }));
+    }
+    // A count-in: Play from beat -1. Nothing before the song's top, its first clock on beat 0 (frame 24,000).
+    {
+        Instance a;
+        a.setup (clickPatch (a));
+        a.render (72000, 128, l, r, [] (uint64_t at) { return playingFrom (-1.0, 120.0, 48000.0, at); });
+        const auto hits = onsets (l);
+        CHECK (hits.size() == 4 && hits[0] >= 24000 && hits[0] < 24000 + 48);
+        CHECK ((clocksOf (hits, 12000) == std::vector<long> { 2, 3, 4, 5 }));
+    }
 }
 
 void testBlockSizes()
@@ -857,6 +962,14 @@ void testEnvelopesAndNotes()
             if (at == 128 * 200) e.note (0, CLAP_EVENT_NOTE_CHOKE, -1);
         });
         CHECK (rms (l, 3000, 2400) > 0.1 && rms (l, 40000, 2400) < 1e-4);
+        // A note off for key -1 (any key) ends every note too.
+        Instance d;
+        d.setup (clickPatch (d, { { "VCA Decay", 0.3 } }));
+        d.render (48000, 128, l, r, [] (uint64_t) { return stopped; }, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 10) e.note (0, CLAP_EVENT_NOTE_ON, 60), e.note (0, CLAP_EVENT_NOTE_ON, 67);
+            if (at == 128 * 200) e.note (0, CLAP_EVENT_NOTE_OFF, -1);
+        });
+        CHECK (rms (l, 3000, 2400) > 0.1 && rms (l, 40000, 2400) < 1e-4);
     }
     // Notes move both VCOs from middle C, and the last one stays after it ends: 72 an octave up, then 55 (G3).
     {
@@ -912,9 +1025,14 @@ void testExtremes()
         });
         bool finite = true;
         float peak = 0.0f;
+        long railed = 0, longest = 0; // samples in a row at the ceiling exactly: what a NaN inside comes out as
         for (float s : l)
+        {
             finite &= std::isfinite (s), peak = std::max (peak, std::fabs (s));
-        CHECK (finite && peak <= 1.0f);
+            railed = std::fabs (s) == 0.98f ? railed + 1 : 0;
+            longest = std::max (longest, railed);
+        }
+        CHECK (finite && peak <= 1.0f && longest < 64);
     }
 }
 
@@ -1015,6 +1133,7 @@ int main (int argc, char** argv)
     testTiming();
     testRhythms();
     testStopRestartJump();
+    testLoopsAndClockChanges();
     testBlockSizes();
     testPitch();
     testEnvelopesAndNotes();
