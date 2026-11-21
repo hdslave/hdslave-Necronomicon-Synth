@@ -18,12 +18,20 @@ CXXFLAGS := -std=c++17 $(OPT) $(WARN) -fno-exceptions -fno-rtti -fvisibility=hid
 LDFLAGS := -shared -s -static-libgcc -static-libstdc++ -Wl,--gc-sections -Wl,-z,now -Wl,-O1 -Wl,--version-script=src/exports.map
 
 SOURCES := src/necronomicon.cpp
-HEADERS := $(wildcard src/*.h)
+HEADERS := $(wildcard src/*.h src/ui/*.h)
+ART := $(OUT)/ui/liquid_art.h
+CXXFLAGS += -I$(OUT)/ui
+
+.DELETE_ON_ERROR:
 
 .PHONY: all test bench clean fingerprint-update sanitize
 all: $(OUT)/Necronomicon.clap
 
-$(OUT)/Necronomicon.clap: $(SOURCES) $(HEADERS) src/exports.map Makefile
+$(ART): tools/liquid_art.py assets/liquid-light/masthead.ppm assets/liquid-light/arches.ppm
+	@mkdir -p $(OUT)/ui
+	python3 tools/liquid_art.py $@
+
+$(OUT)/Necronomicon.clap: $(SOURCES) $(HEADERS) $(ART) src/exports.map Makefile
 	@mkdir -p $(OUT)
 	$(CXX) $(CXXFLAGS) $(SOURCES) $(LDFLAGS) -o $@
 
@@ -31,7 +39,7 @@ $(OUT)/unit: tests/unit.cpp $(HEADERS) Makefile
 	@mkdir -p $(OUT)
 	$(CXX) -std=c++17 $(OPT) $(WARN) -Isrc tests/unit.cpp -o $@
 
-$(OUT)/host: tests/host.cpp tests/wav.h Makefile
+$(OUT)/host: tests/host.cpp tests/wav.h src/melodee_screen.h Makefile
 	@mkdir -p $(OUT)
 	$(CXX) -std=c++17 -O2 $(WARN) -Ithird_party/clap/include tests/host.cpp -ldl -o $@
 
@@ -50,17 +58,17 @@ fingerprint-update: $(OUT)/Necronomicon.clap $(OUT)/fingerprint
 
 # The unit and host tests against a build with AddressSanitizer and UBSan (any error stops it), in build/san/.
 SAN := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g -O1
-sanitize: $(SOURCES) $(HEADERS) tests/host.cpp tests/unit.cpp tests/wav.h Makefile
+sanitize: $(ART) $(SOURCES) $(HEADERS) tests/host.cpp tests/unit.cpp tests/wav.h src/melodee_screen.h Makefile
 	@mkdir -p $(OUT)/san
-	$(CXX) -std=c++17 $(SAN) -mcpu=cortex-a55 $(WARN) -fPIC -shared -Ithird_party/clap/include -Isrc $(SOURCES) -o $(OUT)/san/Necronomicon.clap
+	$(CXX) -std=c++17 $(SAN) -mcpu=cortex-a55 $(WARN) -fPIC -shared -Ithird_party/clap/include -Isrc -I$(OUT)/ui $(SOURCES) -o $(OUT)/san/Necronomicon.clap
 	$(CXX) -std=c++17 $(SAN) $(WARN) -Isrc tests/unit.cpp -o $(OUT)/san/unit
 	$(CXX) -std=c++17 $(SAN) $(WARN) -Ithird_party/clap/include tests/host.cpp -ldl -o $(OUT)/san/host
 	$(OUT)/san/unit
 	$(OUT)/san/host $(OUT)/san/Necronomicon.clap $(OUT)/san
 
-$(OUT)/bench: tests/bench.cpp $(SOURCES) $(HEADERS) Makefile
+$(OUT)/bench: $(ART) tests/bench.cpp $(SOURCES) $(HEADERS) Makefile
 	@mkdir -p $(OUT)
-	$(CXX) -std=c++17 $(OPT) $(WARN) -g -Ithird_party/clap/include -Isrc tests/bench.cpp -o $@
+	$(CXX) -std=c++17 $(OPT) $(WARN) -g -Ithird_party/clap/include -Isrc -I$(OUT)/ui tests/bench.cpp -o $@
 
 bench: $(OUT)/bench
 

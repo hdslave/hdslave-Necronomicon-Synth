@@ -420,6 +420,7 @@ public:
         tick = 0;
         playing = regridWanted = resetWanted = false;
         lastClock = -1;
+        rhythmPosition = 0;
         origin = 0;
         countedGrid = clockBeats();
         now = 0;
@@ -459,6 +460,7 @@ public:
         {
             for (int s = 0; s < 2; ++s)
                 step[s] = 0, fresh[s] = true;
+            rhythmPosition = 0;
             resetWanted = playing; // the generators count again from the next clock (on the grid it falls on)
             snapPitch();
         }
@@ -505,6 +507,12 @@ public:
     {
         held = 0;
         applyGate();
+    }
+
+    // A single snapshot for the screen. Both sequencers may advance on the same clock.
+    uint64_t screenPosition() const
+    {
+        return (uint64_t (rhythmPosition) << 4) | uint64_t ((step[1] << 2) | step[0]);
     }
 
     // Where the sequence's own count is: for a host that gives no song position (0 when it last stopped).
@@ -592,6 +600,7 @@ private:
         const int64_t n = k - origin;
         if (knob[ParamId::run] < 0.5f || n < 0)
             return;
+        rhythmPosition = n;
         bool moved = false;
         for (int s = 0; s < 2; ++s)
             if (pulseAt (routing (s), n))
@@ -626,6 +635,7 @@ private:
             lastClock = b;
             if (knob[ParamId::run] < 0.5f)
                 return;
+            rhythmPosition = std::max<int64_t> (0, b);
             bool sounds = false;
             for (int s = 0; s < 2; ++s)
             {
@@ -645,6 +655,7 @@ private:
         lastClock = b - (late < window ? 1 : 0);
         if (knob[ParamId::run] < 0.5f) // stopped by Run, the sequencers hold their steps through the host's moves
             return;
+        rhythmPosition = std::max<int64_t> (0, lastClock);
         // The steps the song's place puts each sequencer on, as if it had played from the top.
         for (int s = 0; s < 2; ++s)
         {
@@ -836,7 +847,7 @@ private:
     int step[2] {};
     int keys[maxHeld] {};
     int held = 0;
-    int64_t lastClock = -1, origin = 0;
+    int64_t lastClock = -1, origin = 0, rhythmPosition = 0;
     double countedGrid = 0.25;          // the grid lastClock and origin count on
     uint64_t now = 0;                   // frames rendered since prepare()
     int64_t clockedAt = 0;              // the frame the last clock played on

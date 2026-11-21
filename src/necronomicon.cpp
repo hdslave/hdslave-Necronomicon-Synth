@@ -1,6 +1,8 @@
 // Necronomicon: a polyrhythmic subharmonic synthesizer as a CLAP plug-in, made for the Akai MPC Sample.
 // This file is the CLAP side: the factory, ports, parameters, state, presets and the process call, which cuts the
 // block at each event so every change lands on its frame. The sound and the sequencers are in engine.h.
+#include "screen.h"
+#include <chrono>
 #include "engine.h"
 #include "params.h"
 #include "presets.h"
@@ -38,9 +40,74 @@ struct Plugin
     float applied[paramCount] {};
     Engine engine;
     bool active = false;
+    const clap_host_melodee_screen* hostScreen = nullptr;
+    const clap_host_params* hostParams = nullptr;
+    Screen screen;
+    std::atomic<uint64_t> position { 0 }, outgoing { 0 };
+    bool valuesMoved = false; // owned by process/flush
+    // One producer (screen input), one consumer (process). Keep repeated presses in order,
+    // with their individual timestamps, even if the host sleeps between them.
+    struct Press { uint32_t id, generation; uint64_t when; };
+    std::array<Press, 32> presses {};
+    std::atomic<uint32_t> written { 0 }, taken { 0 }, generation { 0 };
 };
 
 Plugin& of (const clap_plugin* p) { return *static_cast<Plugin*> (p->plugin_data); }
+
+static_assert (paramCount <= 64, "page edits use one bit per parameter");
+
+uint64_t steadyMs()
+{
+    return uint64_t (std::chrono::duration_cast<std::chrono::milliseconds> (
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+void repaint (Plugin& p)
+{
+    if (p.hostScreen && p.hostScreen->request_paint) p.hostScreen->request_paint (p.host);
+}
+
+void publishScreen (Plugin& p)
+{
+    if (!p.hostScreen) return;
+    const uint64_t pos = p.engine.screenPosition();
+    const bool moved = pos != p.position.load (std::memory_order_relaxed);
+    if (moved) p.position.store (pos, std::memory_order_release);
+    if (moved || p.valuesMoved) repaint (p);
+    p.valuesMoved = false;
+}
+
+void tellHost (Plugin& p, const clap_output_events* out)
+{
+    if (!out || !p.outgoing.load (std::memory_order_relaxed)) return;
+    uint64_t bits = p.outgoing.exchange (0, std::memory_order_acquire);
+    while (bits)
+    {
+        const unsigned i = unsigned (__builtin_ctzll (bits));
+        const uint64_t bit = uint64_t (1) << i;
+        bits &= ~bit;
+        clap_event_param_value e {};
+        e.header = { sizeof e, 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE, 0 };
+        e.param_id = paramTable[i].id; e.note_id = e.port_index = e.channel = e.key = -1;
+        e.value = p.values[i].load (std::memory_order_relaxed);
+        if (!out->try_push (out, &e.header)) p.outgoing.fetch_or (bit, std::memory_order_release);
+    }
+}
+
+void takePresses (Plugin& p)
+{
+    uint32_t at = p.taken.load (std::memory_order_relaxed);
+    const uint32_t end = p.written.load (std::memory_order_acquire);
+    if (at == end) return;
+    const uint64_t now = steadyMs();
+    while (at != end)
+    {
+        const auto press = p.presses[at++ % p.presses.size()];
+        if (press.generation == p.generation.load (std::memory_order_acquire) && now - press.when <= 500)
+            p.engine.press (press.id);
+    }
+    p.taken.store (end, std::memory_order_release);
+}
 
 // The octaves a step knob at full turn is worth now: the steps' text depends on Seq Oct.
 float octavesNow (const Plugin& p) { return stepOctaves (p.values[paramIndex (ParamId::seqOct)].load (std::memory_order_relaxed)); }
@@ -139,6 +206,7 @@ void handle (Plugin& p, const clap_event_header* e, const clap_output_events* ou
                 p.applied[index] = 0.0f;
                 break;
             }
+            p.valuesMoved |= value != p.applied[index];
             if (info.id == ParamId::seqOct && value != p.applied[index])
                 textMoved (p);
             p.values[index].store (value, std::memory_order_relaxed);
@@ -181,7 +249,8 @@ void handle (Plugin& p, const clap_event_header* e, const clap_output_events* ou
 void paramsFlush (const clap_plugin* plugin, const clap_input_events* in, const clap_output_events* out)
 {
     auto& p = of (plugin);
-    const uint32_t count = in->size (in);
+    tellHost (p, out);
+    const uint32_t count = in ? in->size (in) : 0;
     for (uint32_t i = 0; i < count; ++i)
     {
         const auto* e = in->get (in, i);
@@ -203,11 +272,13 @@ void paramsFlush (const clap_plugin* plugin, const clap_input_events* in, const 
                 const float value = clampParam (paramTable[index], (float) v->value);
                 if (paramTable[index].id == ParamId::seqOct && value != p.values[index].load (std::memory_order_relaxed))
                     textMoved (p);
+                p.valuesMoved = true;
                 p.values[index].store (value, std::memory_order_relaxed);
                 p.mainChanged.store (true, std::memory_order_release);
             }
         }
     }
+    publishScreen (p);
 }
 
 const clap_plugin_params paramsExtension { paramsCount, paramsInfo, paramsValue, paramsToText, paramsFromText, paramsFlush };
@@ -248,12 +319,15 @@ bool readAll (const clap_istream* s, void* data, uint64_t size)
 // Every value at once, from the main thread (a state or a preset loaded).
 void setAll (Plugin& p, const float* values)
 {
+    p.generation.fetch_add (1, std::memory_order_release);
+    p.outgoing.store (0, std::memory_order_release);
     for (uint32_t i = 0; i < paramCount; ++i)
         p.values[i].store (values[i], std::memory_order_relaxed);
     p.mainChanged.store (true, std::memory_order_release);
     if (! p.active) // not processing: the engine takes them now; otherwise at the next block
         for (uint32_t i = 0; i < paramCount; ++i)
             p.applied[i] = values[i], p.engine.set (paramTable[i].id, values[i]);
+    repaint (p);
 }
 
 bool stateSave (const clap_plugin* plugin, const clap_ostream* stream)
@@ -369,6 +443,8 @@ bool pluginInit (const clap_plugin* plugin)
         p.applied[i] = paramTable[i].def;
         p.engine.set (paramTable[i].id, paramTable[i].def);
     }
+    p.hostScreen = static_cast<const clap_host_melodee_screen*> (p.host->get_extension (p.host, CLAP_EXT_MELODEE_SCREEN_HOST));
+    p.hostParams = static_cast<const clap_host_params*> (p.host->get_extension (p.host, CLAP_EXT_PARAMS));
     return true;
 }
 
@@ -383,6 +459,7 @@ bool pluginActivate (const clap_plugin* plugin, double rate, uint32_t, uint32_t 
 {
     auto& p = of (plugin);
     p.engine.prepare (rate, maxFrames);
+    publishScreen (p);
     p.active = true;
     return true;
 }
@@ -390,7 +467,10 @@ bool pluginActivate (const clap_plugin* plugin, double rate, uint32_t, uint32_t 
 void pluginDeactivate (const clap_plugin* plugin) { of (plugin).active = false; }
 bool pluginStart (const clap_plugin*) { return true; }
 void pluginStop (const clap_plugin*) {}
-void pluginReset (const clap_plugin* plugin) { of (plugin).engine.reset(); }
+void pluginReset (const clap_plugin* plugin)
+{
+    auto& p = of (plugin); p.engine.reset(); publishScreen (p);
+}
 
 // Denormals: flush them to zero for the block (the filter and envelopes decay into them), as the FPU had it after.
 struct FlushDenormals
@@ -425,6 +505,8 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
                 p.applied[i] = v, p.engine.set (paramTable[i].id, v);
         }
 
+    tellHost (p, process->out_events);
+
     // Events at the block's first frame come first, the transport after them: a setting the host sends with Play is
     // in place for what Play does (the sequencers lined up by the song's place, the first clock).
     const auto* in = process->in_events;
@@ -447,6 +529,7 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
     else
         p.engine.transport (false, 0.0, 120.0, frames);
 
+    takePresses (p);
     uint32_t done = 0;
     while (done < frames)
     {
@@ -467,13 +550,59 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
     }
     for (; next < count; ++next) // events stamped past the block (a host's mistake): applied at its end
         handle (p, in->get (in, next), process->out_events, lastFrame);
+    publishScreen (p);
     // Never "sleep": the sequencers must hear the next Play, which is no event. (Melodee puts an idle instrument to
     // sleep itself, and the engine skips its own work while the VCA is closed.)
     return CLAP_PROCESS_CONTINUE;
 }
 
+bool screenPaint (const clap_plugin* plugin, const melodee_screen_canvas_t* c)
+{
+    if (!c || !c->pixels || c->width != hdui::width || c->height != hdui::height || c->stride < c->width || c->stride > INT32_MAX)
+        return false;
+    auto& p = of (plugin);
+    const bool drew = p.screen.paint (*c, p.values, p.position.load (std::memory_order_acquire));
+    if (p.screen.animating()) repaint (p); // finish the pulse even when the host skips silent blocks
+    return drew;
+}
+
+bool screenInput (const clap_plugin* plugin, const melodee_screen_input_t* e)
+{
+    if (!e) return false;
+    auto& p = of (plugin);
+    ScreenEdit edit;
+    if (!p.screen.input (*e, p.values, edit)) return false;
+    if (edit.id != hdui::noParam)
+    {
+        if (edit.press)
+        {
+            const uint32_t at = p.written.load (std::memory_order_relaxed);
+            if (at - p.taken.load (std::memory_order_acquire) >= p.presses.size()) return false;
+            p.presses[at % p.presses.size()] = { edit.id, p.generation.load (std::memory_order_relaxed), steadyMs() };
+            p.written.store (at + 1, std::memory_order_release);
+        }
+        else
+        {
+            const int i = paramIndex (edit.id);
+            p.values[i].store (edit.value, std::memory_order_relaxed);
+            p.mainChanged.store (true, std::memory_order_release);
+            p.outgoing.fetch_or (uint64_t (1) << i, std::memory_order_release);
+            if (edit.id == ParamId::seqOct) textMoved (p);
+            if (p.hostParams && p.hostParams->rescan) p.hostParams->rescan (p.host, CLAP_PARAM_RESCAN_VALUES);
+            if (p.hostParams && p.hostParams->request_flush) p.hostParams->request_flush (p.host);
+        }
+        if (p.host->request_process) p.host->request_process (p.host);
+    }
+    repaint (p);
+    return true;
+}
+
+void screenKnobs (const clap_plugin* plugin, clap_id ids[3]) { of (plugin).screen.knobs (ids); }
+const clap_plugin_melodee_screen screenExtension { screenPaint, screenInput, screenKnobs };
+
 const void* pluginExtension (const clap_plugin*, const char* id)
 {
+    if (std::strcmp (id, CLAP_EXT_MELODEE_SCREEN) == 0) return &screenExtension;
     if (std::strcmp (id, CLAP_EXT_PARAMS) == 0) return &paramsExtension;
     if (std::strcmp (id, CLAP_EXT_STATE) == 0) return &stateExtension;
     if (std::strcmp (id, CLAP_EXT_AUDIO_PORTS) == 0) return &audioExtension;

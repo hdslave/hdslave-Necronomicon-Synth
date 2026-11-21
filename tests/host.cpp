@@ -5,6 +5,10 @@
 // the block size, and bounded output at extreme settings. Writes demo renders as WAV files into the output folder.
 //   host Necronomicon.clap OUT_FOLDER
 #include "wav.h"
+#include "../src/melodee_screen.h"
+#include <array>
+#include <chrono>
+#include <thread>
 
 #include <clap/clap.h>
 
@@ -30,15 +34,18 @@ const clap_plugin_entry* entry = nullptr;
 const clap_plugin_factory* factory = nullptr;
 
 // The host side: log, and what a preset load and a text change tell (counted); the plug-in must cope without the rest.
+int screenRequests = 0, processRequests = 0, flushRequests = 0;
 int rescans = 0, textRescans = 0, presetsLoaded = 0, presetErrors = 0, callbacks = 0;
 const void* hostExtension (const clap_host*, const char* id)
 {
+    static const clap_host_melodee_screen screen { [] (const clap_host*) { ++screenRequests; } };
+    if (std::strcmp (id, CLAP_EXT_MELODEE_SCREEN_HOST) == 0) return &screen;
     static const clap_host_log log { [] (const clap_host*, clap_log_severity s, const char* m) { std::printf ("  [plug-in log %d] %s\n", (int) s, m); } };
     static const clap_host_params params { [] (const clap_host*, clap_param_rescan_flags f) {
                                                rescans += (f & CLAP_PARAM_RESCAN_VALUES) != 0;
                                                textRescans += (f & CLAP_PARAM_RESCAN_TEXT) != 0;
                                            },
-                                           [] (const clap_host*, clap_id, clap_param_clear_flags) {}, [] (const clap_host*) {} };
+                                           [] (const clap_host*, clap_id, clap_param_clear_flags) {}, [] (const clap_host*) { ++flushRequests; } };
     static const clap_host_preset_load presetLoad {
         [] (const clap_host*, uint32_t, const char*, const char*, int32_t, const char*) { ++presetErrors; },
         [] (const clap_host*, uint32_t, const char*, const char*) { ++presetsLoaded; },
@@ -51,7 +58,7 @@ const void* hostExtension (const clap_host*, const char* id)
 
 clap_host host {
     CLAP_VERSION, nullptr, "Necronomicon test host", "tests", "", "1",
-    hostExtension, [] (const clap_host*) {}, [] (const clap_host*) {}, [] (const clap_host*) { ++callbacks; },
+    hostExtension, [] (const clap_host*) {}, [] (const clap_host*) { ++processRequests; }, [] (const clap_host*) { ++callbacks; },
 };
 
 // Input events for one process call, in time order.
@@ -1036,6 +1043,101 @@ void testExtremes()
     }
 }
 
+void testScreen()
+{
+    Instance a;
+    const auto* screen = static_cast<const clap_plugin_melodee_screen*> (a.plugin->get_extension (a.plugin, CLAP_EXT_MELODEE_SCREEN));
+    CHECK (screen != nullptr);
+    if (!screen) return;
+    constexpr unsigned stride = 327;
+    constexpr uint32_t sentinel = 0x2468acdf, active = 0xff7effbd, paper = 0xfffff2e6;
+    std::vector<uint32_t> pixels (stride * 218, sentinel);
+    melodee_screen_canvas_t c {};
+    c.pixels = pixels.data(); c.width = 320; c.height = 218; c.stride = stride; c.now_ms = 1000;
+    for (auto& k : c.knobs) k = { -1, true };
+    auto paint = [&](bool whole = false) { c.whole = whole; return screen->paint (a.plugin, &c); };
+    auto in = [&](uint32_t kind, int v = 0) { melodee_screen_input_t e { kind, v, false }; return screen->input (a.plugin, &e); };
+    auto knobs = [&] { std::array<clap_id,3> ids {}; screen->knobs (a.plugin, ids.data()); return ids; };
+    auto pixel = [&](int x, int y) { return pixels[y * stride + x]; };
+    auto step = [&](int lane, int n) { return pixel (49 + lane * 157 + n * 24, 153) == active; };
+    std::vector<float> l, r;
+    auto block = [&](double beat, bool playing, OutEvents* out = nullptr) {
+        a.render (128, 128, l, r, [&](uint64_t) { return Transport { playing, 120.0, beat }; }, {}, out);
+    };
+
+    CHECK (paint (true) && !paint());
+    bool filled = true, padding = true;
+    for (int y = 0; y < 218; ++y)
+        for (unsigned x = 0; x < stride; ++x)
+            if (x < 320) filled &= pixel (x,y) != sentinel;
+            else padding &= pixel (x,y) == sentinel;
+    CHECK (filled && padding);
+    CHECK (!in (99));
+    CHECK (!in (MELODEE_SCREEN_NUDGE, -1));
+    CHECK ((knobs() == std::array<clap_id,3> { a.id ("Rhythm 1"), a.id ("Rhythm 1 > Seq 1"), a.id ("Rhythm 1 > Seq 2") }));
+    CHECK (in (MELODEE_SCREEN_WHEEL, 2));
+    CHECK ((knobs() == std::array<clap_id,3> { a.id ("Rhythm 3"), a.id ("Rhythm 3 > Seq 1"), a.id ("Rhythm 3 > Seq 2") }));
+    CHECK (in (MELODEE_SCREEN_PUSH));
+    const int asked = processRequests, flushed = flushRequests, rescanned = rescans;
+    CHECK (in (MELODEE_SCREEN_WHEEL, 2));
+    CHECK (a.value ("Rhythm 3") == 7 && processRequests > asked && flushRequests > flushed && rescans > rescanned);
+    OutEvents told; Events empty;
+    a.params->flush (a.plugin, &empty.in, &told.out);
+    CHECK (std::find (told.values.begin(), told.values.end(), std::make_pair (a.id ("Rhythm 3"), 7.0)) != told.values.end());
+    CHECK (in (MELODEE_SCREEN_PUSH));
+    paint();
+    c.knobs[0] = { 127, false }; CHECK (paint() && !paint()); c.knobs[0] = { -1, true };
+    c.shift = true; CHECK (paint()); c.shift = false; CHECK (paint());
+
+    const int before = screenRequests;
+    CHECK (a.loadPreset ("polyrhythm-bass") && screenRequests > before);
+    // Clock seven: 3 and 7 advance the first sequencer on 0,3,6,7. 4 and 7 advance the other on 0,4,7.
+    block (1.75, true);
+    const int whilePlaying = screenRequests;
+    CHECK (paint() && step (0,3) && step (1,2) && screenRequests > whilePlaying);
+    CHECK (pixel (199,60) == paper && pixel (66,99) == paper);
+    c.now_ms += 60; CHECK (paint());
+    c.now_ms += 200; paint();
+    const int resting = screenRequests;
+    CHECK (!paint() && screenRequests == resting);
+    // At clock twelve, generators 1 and 2 pulse, and both stars return to the top.
+    block (3.0, true); CHECK (paint());
+    CHECK (pixel (43,60) == paper && pixel (121,60) == paper);
+
+    // Moving from the rhythm page to CLOCK exposes the original transport buttons.
+    CHECK (in (MELODEE_SCREEN_NUDGE, 1) && knobs()[0] == a.id ("Clock Div"));
+    CHECK (in (MELODEE_SCREEN_WHEEL, 4) && knobs()[0] == CLAP_INVALID_ID); // Next
+    a.plugin->reset (a.plugin); block (0.0, false); paint();
+    CHECK (step (0,0) && step (1,0));
+    const int asleep = processRequests;
+    CHECK (in (MELODEE_SCREEN_PUSH) && processRequests > asleep);
+    std::this_thread::sleep_for (std::chrono::milliseconds (550));
+    CHECK (in (MELODEE_SCREEN_PUSH)); // a fresh press cannot renew an older one
+    block (0.0, false); paint();
+    CHECK (step (0,1) && step (1,1));
+    CHECK (in (MELODEE_SCREEN_PUSH) && in (MELODEE_SCREEN_PUSH));
+    block (0.0, false); paint(); CHECK (step (0,3) && step (1,3));
+
+    // Each non-button parameter remains reachable with a pot somewhere on the custom panels.
+    std::vector<clap_id> reachable;
+    in (MELODEE_SCREEN_NUDGE,-1);
+    for (int group = 0; group < 9; ++group)
+    {
+        in (MELODEE_SCREEN_WHEEL,-100);
+        for (int row = 0; row < 10; ++row)
+        {
+            const auto ids = knobs(); reachable.insert (reachable.end(), ids.begin(), ids.end());
+            in (MELODEE_SCREEN_WHEEL,1);
+        }
+        in (MELODEE_SCREEN_NUDGE,1);
+    }
+    for (const auto& [name,id] : a.ids)
+        if (name != "Reset" && name != "Next" && name != "Trigger")
+            CHECK (std::find (reachable.begin(), reachable.end(), id) != reachable.end());
+    CHECK (!in (MELODEE_SCREEN_NUDGE,1));
+    c.width = 319; CHECK (!paint (true));
+}
+
 void demos (const std::string& folder)
 {
     // A few patterns to listen to, 8 s each at 120 BPM: the factory presets. Each preset (loaded by its key) must
@@ -1126,6 +1228,7 @@ int main (int argc, char** argv)
         return 1;
     }
     factory = static_cast<const clap_plugin_factory*> (entry->get_factory (CLAP_PLUGIN_FACTORY_ID));
+    testScreen();
     testDescription();
     testParameters();
     testState();
