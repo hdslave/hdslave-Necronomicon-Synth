@@ -27,7 +27,7 @@ subs at 1/3 and 1/5 are a C with the F and the A-flat of the subharmonic series 
 
 ## Liquid Light
 
-Melodee’s Edit and Stage pages show one stained-glass window for each rhythm generator. Its clock divisor sets the number of lobes, and the white glint follows the current lobe. Read the two four-step strips below the windows to see which sequencers actually advanced under OR or XOR. Each window names the sequencers it feeds. [Screen captured in Melodee](assets/previews/liquid-light.png)
+In hdslaveOS, the Edit and Stage pages show one stained-glass window for each rhythm generator. Its clock divisor sets the number of lobes, and the white glint follows the current lobe. Read the two four-step strips below the windows to see which sequencers actually advanced under OR or XOR. Each window names the sequencers it feeds. [Screen captured in Melodee](assets/previews/liquid-light.png)
 
 Turn the wheel to select a generator. K1 changes its divisor, K2 routes it to Seq 1 and K3 routes it to Seq 2. Push the wheel to edit the divisor with detents and push again to finish. Minus and Plus visit the clock, sequencer, oscillator, mixer, filter and amp controls. On those pages the wheel selects a row, Push edits it or presses its button, and K1–K3 follow the selected row and the next two. Shift shows the controls. A hollow marker beneath a knob value shows the physical pot position until pickup.
 
