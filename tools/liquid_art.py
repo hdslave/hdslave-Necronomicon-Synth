@@ -6,7 +6,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 SIZE = 56
 PALETTE_KEYS = 24
-EYE_WIDTH, EYE_HEIGHT, EYE_FRAMES = 65, 24, 280
+EYE_WIDTH, EYE_HEIGHT, EYE_FRAMES = 72, 28, 280
 TITLE_SCALE = 4  # horizontal samples per display pixel
 STOPS = [
     (0, 31, 10, 70), (.18, 69, 24, 145), (.32, 82, 43, 237), (.42, 32, 192, 249),

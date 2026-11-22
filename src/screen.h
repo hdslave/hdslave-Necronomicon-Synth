@@ -186,7 +186,7 @@ class Screen
         const auto& p = panels::groups[group];
         print (r, 0, 0, art::settings, 320, 320, 110);
         const auto& patch = art::eyePatches[eye];
-        print (r, 149 + patch.x, 52 + patch.y, art::eyePixels + patch.offset, patch.w, patch.w, patch.h);
+        print (r, 166 + patch.x, 44 + patch.y, art::eyePixels + patch.offset, patch.w, patch.w, patch.h);
         r.text (12, 3, p.name, paper);
         const int row = rows[group], first = std::clamp (row - 3, 0, std::max (0, p.count - 6));
         for (int i = first; i < std::min (p.count, first + 6); ++i)

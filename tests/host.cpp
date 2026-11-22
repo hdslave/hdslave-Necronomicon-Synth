@@ -1182,13 +1182,14 @@ void testScreen()
     CHECK (step (0,0) && step (1,0));
     c.now_ms = 0; paint();
     const auto clockPage = pixels;
-    c.now_ms = 2000; CHECK (paint() && changed (clockPage, 168, 92, 28, 20)); // held glance
+    constexpr int eyeX = 166, eyeY = 82, eyeW = 72, eyeH = 28;
+    c.now_ms = 2000; CHECK (paint() && changed (clockPage, 192, 88, 26, 19)); // held glance
     c.now_ms = 5400; paint();
     const auto openEye = pixels;
-    c.now_ms = 5760; CHECK (paint() && changed (openEye, 160, 90, 48, 24)); // lid shuts
-    c.now_ms = 6200; CHECK (paint() && !changed (openEye, 149, 90, 65, 24)); // reopens at the same gaze
-    CHECK (!changed (clockPage, 0, 36, stride, 54) && !changed (clockPage, 0, 114, stride, 104));
-    CHECK (!changed (clockPage, 0, 90, 149, 24) && !changed (clockPage, 214, 90, stride - 214, 24));
+    c.now_ms = 5760; CHECK (paint() && changed (openEye, 192, 88, 26, 19)); // lid shuts
+    c.now_ms = 6200; CHECK (paint() && !changed (openEye, eyeX, eyeY, eyeW, eyeH)); // reopens at the same gaze
+    CHECK (!changed (clockPage, 0, 36, stride, eyeY - 36) && !changed (clockPage, 0, eyeY + eyeH, stride, 218 - eyeY - eyeH));
+    CHECK (!changed (clockPage, 0, eyeY, eyeX, eyeH) && !changed (clockPage, eyeX + eyeW, eyeY, stride - eyeX - eyeW, eyeH));
     CHECK (!paint());
     // Stopped and left alone 4 s on a settings page, the eye rests: no next paint asked for (battery). Opened again, it
     // moves.
