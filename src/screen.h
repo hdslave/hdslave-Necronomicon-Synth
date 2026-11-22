@@ -265,6 +265,7 @@ class Screen
 
 public:
     bool needsAnimation() const { return group != 0 || fading; }
+    bool flashing() const { return fading; } // a hit's short flash on the rhythm page, always run to its end
 
     void knobs (uint32_t ids[3]) const
     {

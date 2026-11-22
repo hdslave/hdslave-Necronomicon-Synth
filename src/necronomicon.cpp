@@ -51,7 +51,14 @@ struct Plugin
     struct Press { uint32_t id, generation; uint64_t when; };
     std::array<Press, 32> presses {};
     std::atomic<uint32_t> written { 0 }, taken { 0 }, generation { 0 };
+    // The settings pages' eye animates while the song plays and for screenRestMs after the page is opened, touched or a
+    // pot moves; stopped and left alone it rests (no next paint asked for), and Play, a value or any input wakes it.
+    // Main thread only (paint and input).
+    uint64_t screenBusyMs = 0;
+    bool screenTouched = true;
+    int16_t shownPots[3] { -2, -2, -2 };
 };
+constexpr uint64_t screenRestMs = 4000;
 
 Plugin& of (const clap_plugin* p) { return *static_cast<Plugin*> (p->plugin_data); }
 
@@ -583,7 +590,13 @@ bool screenPaint (const clap_plugin* plugin, const melodee_screen_canvas_t* c)
     auto& p = of (plugin);
     const bool drew = p.screen.paint (*c, p.values, p.position.load (std::memory_order_acquire),
                                       p.colorStep.load (std::memory_order_relaxed));
-    if (c->playing || p.screen.needsAnimation()) repaint (p);
+    bool busy = p.screenTouched || c->whole || c->playing;
+    for (int k = 0; k < 3; ++k)
+        if (c->knobs[k].position != p.shownPots[k]) p.shownPots[k] = c->knobs[k].position, busy = true;
+    p.screenTouched = false;
+    if (busy) p.screenBusyMs = c->now_ms;
+    const bool recent = c->now_ms < p.screenBusyMs || c->now_ms - p.screenBusyMs < screenRestMs;
+    if (c->playing || p.screen.flashing() || (p.screen.needsAnimation() && recent)) repaint (p);
     return drew;
 }
 
@@ -591,6 +604,7 @@ bool screenInput (const clap_plugin* plugin, const melodee_screen_input_t* e)
 {
     if (!e) return false;
     auto& p = of (plugin);
+    p.screenTouched = true; // the page animates again from its next paint
     ScreenEdit edit;
     if (!p.screen.input (*e, p.values, edit)) return false;
     if (edit.id != hdui::noParam)

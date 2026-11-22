@@ -1190,6 +1190,14 @@ void testScreen()
     CHECK (!changed (clockPage, 0, 36, stride, 54) && !changed (clockPage, 0, 114, stride, 104));
     CHECK (!changed (clockPage, 0, 90, 149, 24) && !changed (clockPage, 214, 90, stride - 214, 24));
     CHECK (!paint());
+    // Stopped and left alone 4 s on a settings page, the eye rests: no next paint asked for (battery). Opened again, it
+    // moves.
+    c.now_ms = 20000;
+    const int resting = screenRequests;
+    paint();
+    CHECK (screenRequests == resting);
+    paint (true);
+    CHECK (screenRequests > resting);
     const int asleep = processRequests;
     CHECK (in (MELODEE_SCREEN_PUSH) && processRequests > asleep);
     std::this_thread::sleep_for (std::chrono::milliseconds (550));
