@@ -41,7 +41,9 @@ quantize-1 cd515105d6cbcd5d
 quantize-2 80b9c4ae516e58a5
 quantize-3 726cf9ec5e3b9149
 quantize-4 2f0602e217742c11
-notes-playing 0c60a1ff2db3e791
+notes-playing bbbea4c777d8ab41
 xor-subs 7ef35b4e6c6b86dd
 loop-wrap-128 e88d7a92ba4ae459
 loop-wrap-32 e88d7a92ba4ae459
+step-pads-playing 9d73209f2cb41d89
+step-pads-stopped 8f70b68a54a48431

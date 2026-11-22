@@ -10,7 +10,7 @@
 #include <strings.h>
 
 #ifndef NECRONOMICON_VERSION
-#define NECRONOMICON_VERSION "0.1.5"
+#define NECRONOMICON_VERSION "0.2.0"
 #endif
 
 namespace necronomicon
@@ -84,6 +84,8 @@ constexpr float divisorsPerOctave = 3.0f;
 constexpr float fineTuneCents = 50.0f;
 // A MIDI note moves both VCOs from middle C (note 60): it is the panel's 1 V/octave input, normalled to both.
 constexpr int middleC = 60;
+// While Run is on, notes 36 to 51 (pads A01-A16 of a Melodee plug-in track at its defaults) play the steps instead.
+constexpr int firstPad = 36;
 
 inline const char* const offOn[] = { "Off", "On" };
 // UP: the VCO and its two subs square; MIDDLE: the VCO a pulse whose width SUB 1's sawtooth moves, the subs

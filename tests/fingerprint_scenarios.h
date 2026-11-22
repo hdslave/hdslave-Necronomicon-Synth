@@ -119,6 +119,29 @@ std::vector<Scenario> scenarios()
         };
         list.push_back (s);
     }
+    // 0.2.0: the pads as steps while Run is on (notes 36-51: Seq 1's steps, Seq 2's, then both again), playing and
+    // stopped: one on a clock's frame, two on one frame, pads with a transposing note, Run off (the pads notes again)
+    // and on, Next and Reset ending a pad's step, EG Off (a pad still starts the EGs) and Hold (only the pitch).
+    Scenario padsPlaying;
+    padsPlaying.name = "step-pads-playing";
+    padsPlaying.preset = "polyrhythm-bass";
+    padsPlaying.seconds = 6.0;
+    padsPlaying.events = { { 0, Event::noteOn, "", 38 }, { 9001, Event::noteOn, "", 41 }, { 12000, Event::noteOn, "", 36 },
+                           { 20000, Event::noteOn, "", 39 }, { 20000, Event::noteOn, "", 43 }, { 20000, Event::noteOn, "", 37 },
+                           { 26000, Event::noteOff, "", 39 }, { 30001, Event::noteOn, "", 67 }, { 33000, Event::noteOn, "", 50 },
+                           { 36000, Event::noteOff, "", 67 }, { 52000, Event::noteOn, "", 47 }, { 52000, Event::noteOn, "", 47 },
+                           { 60000, Event::noteOff, "", 47 }, { 70000, Event::param, "Next", 1.0 }, { 71000, Event::noteOn, "", 44 },
+                           { 90000, Event::param, "Run", 0.0 }, { 96000, Event::noteOn, "", 40 }, { 120000, Event::noteOff, "", 40 },
+                           { 130000, Event::noteOn, "", 51 }, { 150000, Event::param, "Run", 1.0 }, { 160000, Event::noteOn, "", 46 },
+                           { 170000, Event::noteOff, "", 51 }, { 200000, Event::param, "Reset", 1.0 }, { 200000, Event::noteOn, "", 42 },
+                           { 230000, Event::param, "EG", 0.0 }, { 240000, Event::noteOn, "", 48 }, { 260000, Event::param, "EG", 2.0 },
+                           { 270000, Event::noteOn, "", 45 } };
+    list.push_back (padsPlaying);
+    Scenario padsStopped = padsPlaying;
+    padsStopped.name = "step-pads-stopped";
+    padsStopped.preset = "subharmonic-chords";
+    padsStopped.transport = [] (uint64_t, double, double) -> std::pair<bool, double> { return { false, 0.0 }; };
+    list.push_back (padsStopped);
     return list;
 }
 } // namespace

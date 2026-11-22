@@ -1,8 +1,9 @@
 // Loads Necronomicon.clap as a host does and checks it: description and ports, parameters (the steps' text following
 // Seq Oct), state, presets, the clock against the host's transport (timing to the frame, stop, restart, jumps, a loop
 // that wraps inside a block), the rhythm generators (polyrhythms, OR and XOR), the sequencers' pitches on the VCOs
-// and on the subs' divisors, the quantizer, the EG modes, notes, Reset, Next and Trigger, the same output whatever
-// the block size, and bounded output at extreme settings. Writes demo renders as WAV files into the output folder.
+// and on the subs' divisors, the quantizer, the EG modes, notes, the pads as steps while Run is on, Reset, Next and
+// Trigger, the same output whatever the block size, and bounded output at extreme settings. Writes demo renders as WAV
+// files into the output folder.
 //   host Necronomicon.clap OUT_FOLDER
 #include "wav.h"
 #include "../src/melodee_screen.h"
@@ -22,6 +23,7 @@
 #include <map>
 #include <random>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -1014,6 +1016,324 @@ void testEnvelopesAndNotes()
     }
 }
 
+// The pads while Run is on (0.2.0): notes 36-51 (pads A01-A16 of a Melodee plug-in track) are the steps: 36-39 Seq
+// 1's steps 1-4, 40-43 Seq 2's, 44-51 the same again. A pad shows its step until that sequencer's next step (a clock,
+// Reset or Next) without moving it, and starts both EGs as Trigger does; other notes transpose and gate as before;
+// with Run off every note does.
+constexpr double e3 = 164.8138, e4 = 329.6276, e5 = 659.2551, b3 = 246.9417;
+
+void testStepPads()
+{
+    std::vector<float> l, r, l2, r2;
+    auto still = [] (uint64_t) { return stopped; };
+    // A patch whose sound shows every step: both VCOs, Seq 1 on VCO 1's first sub too, 8-JI, no generator routed
+    // (only the pads and the buttons move the steps), the host stopped.
+    auto stepPatch = [] (Instance& a, Values extra) {
+        Values v = noRhythms ({ { "VCO 1 Freq", 0.25 }, { "VCO 2 Freq", 0.3 }, { "VCO 1 Level", 0.6 }, { "VCO 1 Sub 1 Level", 0.5 },
+            { "VCO 1 Sub 1", 5 }, { "VCO 1 Sub 2 Level", 0.0 }, { "VCO 2 Level", 0.6 }, { "VCO 2 Sub 1 Level", 0.0 }, { "VCO 2 Sub 2 Level", 0.0 },
+            { "Quantize", a.valueOf ("Quantize", "8-JI") }, { "Seq Oct", a.valueOf ("Seq Oct", "+/-2") }, { "Seq 1 > Osc 1", 1.0 },
+            { "Seq 1 > Sub 1", 1.0 }, { "Seq 1 Step 1", 0.1 }, { "Seq 1 Step 2", 0.35 }, { "Seq 1 Step 3", -0.2 }, { "Seq 1 Step 4", -0.45 },
+            { "Seq 2 Step 1", -0.15 }, { "Seq 2 Step 2", 0.25 }, { "Seq 2 Step 3", 0.05 }, { "Seq 2 Step 4", -0.3 }, { "Cutoff", 0.8 },
+            { "VCF EG Amt", 0.2 }, { "VCA Attack", 0.0 }, { "VCA Decay", 0.5 }, { "Volume", 0.7 } });
+        v.insert (v.end(), extra.begin(), extra.end());
+        return v;
+    };
+    auto play = [&] (const Values& extra, const std::function<void (uint64_t, Events&, Instance&)>& events, std::vector<float>& out,
+                     uint32_t block = 128) {
+        Instance a;
+        a.setup (stepPatch (a, extra));
+        std::vector<float> right;
+        a.render (28800, block, out, right, still, [&] (uint64_t at, uint32_t, Events& e) { events (at, e, a); });
+    };
+    // Each pad against the sequencer playing that step: Next pressed up to it and Trigger, on the pad's frame (the
+    // other sequencer's steps all alike, since Next moves it too), after a note (64) has transposed both VCOs. In EG
+    // On, Off (the pad starts the EGs as Trigger does) and Hold (it only moves the pitch); a CLAP note and a MIDI one.
+    for (int seq = 0; seq < 2; ++seq)
+        for (double mode : { 1.0, 0.0, 2.0 }) // EG: On, Off, Hold
+            for (int i = 0; i < 4; ++i)
+            {
+                Values extra { { "EG", mode } };
+                for (int k = 1; k <= 4; ++k)
+                    extra.push_back ({ "Seq " + std::to_string (2 - seq) + " Step " + std::to_string (k), seq == 0 ? -0.15 : 0.1 });
+                auto before = [] (uint64_t at, Events& e) {
+                    if (at == 128 * 5) e.note (0, CLAP_EVENT_NOTE_ON, 64);
+                    if (at == 128 * 6) e.note (0, CLAP_EVENT_NOTE_OFF, 64);
+                };
+                std::vector<float> pad, padMidi, sequencer;
+                const int16_t key = (int16_t) (36 + 4 * seq + i);
+                play (extra, [&] (uint64_t at, Events& e, Instance&) {
+                    before (at, e);
+                    if (at == 128 * 40) e.note (0, CLAP_EVENT_NOTE_ON, key);
+                    if (at == 128 * 60) e.note (0, CLAP_EVENT_NOTE_OFF, key);
+                }, pad);
+                play (extra, [&] (uint64_t at, Events& e, Instance&) { // pads 44-51 are 36-43 again; as MIDI
+                    before (at, e);
+                    if (at == 128 * 40) e.midi (0, 0x90, (uint8_t) (key + 8), 100);
+                    if (at == 128 * 60) e.midi (0, 0x80, (uint8_t) (key + 8), 0);
+                }, padMidi);
+                play (extra, [&] (uint64_t at, Events& e, Instance& a) {
+                    before (at, e);
+                    if (at == 128 * 40)
+                    {
+                        for (int n = 0; n < i; ++n)
+                            a.set (e, "Next", 1.0);
+                        a.set (e, "Trigger", 1.0);
+                    }
+                }, sequencer);
+                if (debug && pad != sequencer)
+                    std::printf ("debug pad %d (EG %g) differs from its step\n", key, mode);
+                CHECK (pad == sequencer && padMidi == sequencer && rms (pad, 5120, 4800) > 0.01);
+            }
+    // Pads on one frame: two of one sequencer, the later wins (37 then 38 is 38: Next twice and Trigger); one of each,
+    // both apply in either order; the EGs start once.
+    {
+        auto pads = [&] (std::vector<int16_t> keys, std::vector<float>& out) {
+            play ({}, [&] (uint64_t at, Events& e, Instance&) {
+                if (at == 128 * 40)
+                    for (int16_t k : keys)
+                        e.note (0, CLAP_EVENT_NOTE_ON, k);
+            }, out);
+        };
+        std::vector<float> both, one;
+        Values same;
+        for (int k = 1; k <= 4; ++k)
+            same.push_back ({ "Seq 2 Step " + std::to_string (k), 0.25 });
+        play (same, [&] (uint64_t at, Events& e, Instance&) { if (at == 128 * 40) e.note (0, CLAP_EVENT_NOTE_ON, 37), e.note (0, CLAP_EVENT_NOTE_ON, 38); }, both);
+        play (same, [&] (uint64_t at, Events& e, Instance& a) { if (at == 128 * 40) a.set (e, "Next", 1.0), a.set (e, "Next", 1.0), a.set (e, "Trigger", 1.0); }, one);
+        CHECK (both == one && onsets (both).size() == 1);
+        pads ({ 39, 42 }, both);
+        pads ({ 42, 39 }, one);
+        CHECK (both == one && onsets (both).size() == 1);
+        // Measured: VCO 1 alone, then VCO 2 alone, held (EG: Hold), both pads on one frame: Seq 1's step 4 (C4) and
+        // Seq 2's step 3 (+4: E5).
+        for (int vco = 1; vco <= 2; ++vco)
+        {
+            Instance a;
+            a.setup (dronePatch (a, { { "VCO 1 Level", vco == 1 ? 1.0 : 0.0 }, { "VCO 2 Level", vco == 2 ? 1.0 : 0.0 }, { "VCO 2 Freq", 0.25 },
+                                      { "Seq 2 Step 3", 4.0 / 24.0 } }));
+            a.render (48000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+                if (at == 128 * 75) e.note (0, CLAP_EVENT_NOTE_ON, 39), e.note (0, CLAP_EVENT_NOTE_ON, 42);
+            });
+            const double before = hz (l, 0.05, 0.19), after = hz (l, 0.25, 0.95);
+            if (debug) std::printf ("debug two pads, VCO %d: %.1f then %.1f\n", vco, before, after);
+            CHECK (near (before, c5, 0.005) && near (after, vco == 1 ? c4 : e5, 0.005));
+        }
+    }
+    // Stopped: a pad plays its step without moving the sequencer. Seq 1 on C5; pad 38 (step 3, G5); Next goes to step
+    // 2 (C6), not 4; pad 39 (C4); Reset back to step 1 (C5).
+    {
+        Instance a;
+        a.setup (dronePatch (a));
+        a.render (96000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 150) e.note (0, CLAP_EVENT_NOTE_ON, 38);
+            if (at == 128 * 200) e.note (0, CLAP_EVENT_NOTE_OFF, 38);
+            if (at == 128 * 300) a.set (e, "Next", 1.0);
+            if (at == 128 * 450) e.note (0, CLAP_EVENT_NOTE_ON, 39), e.note (0, CLAP_EVENT_NOTE_OFF, 39);
+            if (at == 128 * 600) a.set (e, "Reset", 1.0);
+        });
+        const double s1 = hz (l, 0.05, 0.38), p3 = hz (l, 0.45, 0.78), s2 = hz (l, 0.85, 1.18), p4 = hz (l, 1.25, 1.58), back = hz (l, 1.65, 1.95);
+        if (debug) std::printf ("debug pads stopped: %.1f %.1f %.1f %.1f %.1f\n", s1, p3, s2, p4, back);
+        CHECK (near (s1, c5, 0.005) && near (p3, g5, 0.005) && near (s2, c6, 0.005) && near (p4, c4, 0.005) && near (back, c5, 0.005));
+    }
+    // Playing (Rhythm 1 into Seq 1 on quarter notes: C5, C6, G5, C4 a half second each): pad 39 (C4) inside the first
+    // step holds until the next clock, which plays step 2 as it would have; pad 37 (C6, as MIDI) inside step 3 the same.
+    {
+        Instance a;
+        a.setup (dronePatch (a, { { "Rhythm 1", 1 }, { "Rhythm 1 > Seq 1", 1.0 }, { "Clock Div", a.valueOf ("Clock Div", "1/4") } }));
+        a.render (96000, 128, l, r, [] (uint64_t at) { return playingFrom (0.0, 120.0, 48000.0, at); }, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 94) e.note (0, CLAP_EVENT_NOTE_ON, 39);
+            if (at == 128 * 100) e.note (0, CLAP_EVENT_NOTE_OFF, 39);
+            if (at == 128 * 430) e.midi (0, 0x90, 37, 90), e.midi (0, 0x80, 37, 0);
+        });
+        const double w[6] = { hz (l, 0.05, 0.24), hz (l, 0.27, 0.49), hz (l, 0.55, 0.95), hz (l, 1.02, 1.14), hz (l, 1.17, 1.49), hz (l, 1.55, 1.95) };
+        if (debug) std::printf ("debug pads playing: %.1f %.1f %.1f %.1f %.1f %.1f\n", w[0], w[1], w[2], w[3], w[4], w[5]);
+        CHECK (near (w[0], c5, 0.005) && near (w[1], c4, 0.005) && near (w[2], c6, 0.005) && near (w[3], g5, 0.005) && near (w[4], c6, 0.005)
+               && near (w[5], c4, 0.005));
+    }
+    // A pad on Play's frame (its events come before the transport): Play at beat 2.2 puts Seq 1 on step 3 (G5) until
+    // beat 3; pad 36 with it shows step 1 (C5) until then, and beat 3 plays step 4 (C4) as without it.
+    {
+        Instance a;
+        a.setup (dronePatch (a, { { "Rhythm 1", 1 }, { "Rhythm 1 > Seq 1", 1.0 }, { "Clock Div", a.valueOf ("Clock Div", "1/4") } }));
+        a.render (48000, 128, l, r, [] (uint64_t at) { return at < 1280 ? Transport { false, 120.0, 2.2 } : playingFrom (2.2, 120.0, 48000.0, at - 1280); },
+                  [&] (uint64_t at, uint32_t, Events& e) { if (at == 1280) e.note (0, CLAP_EVENT_NOTE_ON, 36); });
+        if (debug) std::printf ("debug pad with Play: %.1f %.1f\n", hz (l, 0.05, 0.41), hz (l, 0.45, 0.9));
+        CHECK (near (hz (l, 0.05, 0.41), c5, 0.005) && near (hz (l, 0.45, 0.9), c4, 0.005));
+        // Play from the top: the clock on Play's frame steps Seq 1 after the pad, so the pad gives way to it at once
+        // (the same output as without it); Seq 2, which no generator moves, keeps the pad's step (41: step 2, G5).
+        for (int16_t key : { (int16_t) 38, (int16_t) -1 })
+        {
+            Instance b;
+            b.setup (dronePatch (b, { { "Rhythm 1", 1 }, { "Rhythm 1 > Seq 1", 1.0 }, { "Clock Div", b.valueOf ("Clock Div", "1/4") } }));
+            b.render (48000, 128, key < 0 ? l2 : l, r, [] (uint64_t at) { return at < 1280 ? stopped : playingFrom (0.0, 120.0, 48000.0, at - 1280); },
+                      [&] (uint64_t at, uint32_t, Events& e) { if (at == 1280 && key >= 0) e.note (0, CLAP_EVENT_NOTE_ON, key); });
+        }
+        CHECK (l == l2);
+        Instance c;
+        c.setup (dronePatch (c, { { "VCO 1 Level", 0.0 }, { "VCO 2 Level", 1.0 }, { "VCO 2 Freq", 0.25 }, { "Seq 2 Step 2", 7.0 / 24.0 },
+                                  { "Rhythm 1", 1 }, { "Rhythm 1 > Seq 1", 1.0 }, { "Clock Div", c.valueOf ("Clock Div", "1/4") } }));
+        c.render (72000, 128, l, r, [] (uint64_t at) { return at < 1280 ? stopped : playingFrom (0.0, 120.0, 48000.0, at - 1280); },
+                  [&] (uint64_t at, uint32_t, Events& e) { if (at == 1280) e.note (0, CLAP_EVENT_NOTE_ON, 41); });
+        CHECK (near (hz (l, 0.05, 1.45), g5, 0.005));
+    }
+    // Other notes still transpose (52 and 35, just beside the pads), and the pads keep the transposition: C5; 52 (-8:
+    // E4); pad 36 (step 1: E4 still); pad 37 (step 2, an octave up: E5); 35 held (-25 from step 2: B3).
+    {
+        Instance a;
+        a.setup (dronePatch (a));
+        a.render (72000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 75) e.note (0, CLAP_EVENT_NOTE_ON, 52);
+            if (at == 128 * 150) e.note (0, CLAP_EVENT_NOTE_OFF, 52);
+            if (at == 128 * 225) e.note (0, CLAP_EVENT_NOTE_ON, 36);
+            if (at == 128 * 300) e.note (0, CLAP_EVENT_NOTE_ON, 37);
+            if (at == 128 * 375) e.midi (0, 0x90, 35, 100);
+        });
+        const double w[5] = { hz (l, 0.05, 0.19), hz (l, 0.22, 0.58), hz (l, 0.62, 0.79), hz (l, 0.82, 0.99), hz (l, 1.02, 1.45) };
+        if (debug) std::printf ("debug pads and notes: %.1f %.1f %.1f %.1f %.1f\n", w[0], w[1], w[2], w[3], w[4]);
+        CHECK (near (w[0], c5, 0.005) && near (w[1], e4, 0.005) && near (w[2], e4, 0.005) && near (w[3], e5, 0.005) && near (w[4], b3, 0.005));
+    }
+    // Run off: the pads are notes again (40 is -20, E3; 48 an octave down, C4), held as a gate; switched on, a pad
+    // (40, Seq 2's step 1) leaves VCO 1 where the note put it.
+    {
+        Instance a;
+        a.setup (dronePatch (a, { { "Run", 0.0 } }));
+        a.render (84000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 75) e.note (0, CLAP_EVENT_NOTE_ON, 40);
+            if (at == 128 * 150) e.note (0, CLAP_EVENT_NOTE_OFF, 40);
+            if (at == 128 * 225) a.set (e, "Run", 1.0);
+            if (at == 128 * 300) e.note (0, CLAP_EVENT_NOTE_ON, 40), e.note (0, CLAP_EVENT_NOTE_OFF, 40);
+            if (at == 128 * 375) a.set (e, "Run", 0.0);
+            if (at == 128 * 450) e.note (0, CLAP_EVENT_NOTE_ON, 48);
+        });
+        const double w[4] = { hz (l, 0.22, 0.58), hz (l, 0.62, 0.78), hz (l, 0.82, 1.18), hz (l, 1.22, 1.7) };
+        if (debug) std::printf ("debug run off: %.1f %.1f %.1f %.1f\n", w[0], w[1], w[2], w[3]);
+        CHECK (near (w[0], e3, 0.005) && near (w[1], e3, 0.005) && near (w[2], e3, 0.005) && near (w[3], c4, 0.005));
+    }
+    // Gates (EG On, a short VCA decay, stopped). Run off: note 40 holds the EGs while it is down. Run on: note 52 does
+    // too, pad 40 does not (one hit that decays while the key is still down).
+    for (const auto& gate : { std::tuple { 0.0, 40, true }, std::tuple { 1.0, 52, true }, std::tuple { 1.0, 40, false } })
+    {
+        const double run = std::get<0> (gate);
+        const int key = std::get<1> (gate);
+        const bool holds = std::get<2> (gate);
+        Instance a;
+        a.setup (clickPatch (a, { { "VCA Decay", 0.3 }, { "Run", run } }));
+        a.render (48000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 10) e.note (0, CLAP_EVENT_NOTE_ON, (int16_t) key);
+            if (at == 128 * 200) e.note (0, CLAP_EVENT_NOTE_OFF, (int16_t) key);
+        });
+        if (debug) std::printf ("debug gate run %g key %d: %.4f %.4f %.4f\n", run, key, rms (l, 3000, 2400), rms (l, 20000, 2400), rms (l, 40000, 2400));
+        CHECK (rms (l, 1280, 1200) > 0.1 && rms (l, 40000, 2400) < 1e-4);
+        CHECK (holds ? std::fabs (rms (l, 20000, 2400) - rms (l, 3000, 2400)) < 0.01 : rms (l, 20000, 2400) < 1e-4);
+    }
+    // On, on, off of one pad (a pad hit again while its off is pending): two hits, each decaying while it is down; its
+    // off ends nothing. Under a held note (60), a pad and its off leave the note's gate held.
+    {
+        Instance a;
+        a.setup (clickPatch (a, { { "VCA Decay", 0.3 } }));
+        a.render (48000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 10 || at == 128 * 100) e.note (0, CLAP_EVENT_NOTE_ON, 37);
+            if (at == 128 * 300) e.note (0, CLAP_EVENT_NOTE_OFF, 37);
+        });
+        const auto hits = onsets (l);
+        CHECK (hits.size() == 2 && hits[0] < 1280 + 48 && hits[1] >= 12800 && hits[1] < 12800 + 48);
+        CHECK (rms (l, 8000, 2400) < 1e-4 && rms (l, 30000, 2400) < 1e-4);
+        Instance b;
+        b.setup (clickPatch (b, { { "VCA Decay", 0.3 } }));
+        b.render (48000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 10) e.note (0, CLAP_EVENT_NOTE_ON, 60);
+            if (at == 128 * 100) e.note (0, CLAP_EVENT_NOTE_ON, 37);
+            if (at == 128 * 150) e.note (0, CLAP_EVENT_NOTE_OFF, 37), e.midi (0, 0x80, 37, 0), e.note (0, CLAP_EVENT_NOTE_CHOKE, 37);
+            if (at == 128 * 300) e.note (0, CLAP_EVENT_NOTE_OFF, 60);
+        });
+        CHECK (rms (l, 3000, 2400) > 0.1 && std::fabs (rms (l, 30000, 2400) - rms (l, 3000, 2400)) < 0.01 && rms (l, 44000, 2400) < 1e-4);
+    }
+    // A choke and a CC 120/123 storm on every channel while a note and a pad are down: all quiet; the next pad is one
+    // hit that decays (nothing held over).
+    {
+        Instance a;
+        a.setup (clickPatch (a, { { "VCA Decay", 0.3 } }));
+        a.render (72000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 10) e.note (0, CLAP_EVENT_NOTE_ON, 60), e.note (0, CLAP_EVENT_NOTE_ON, 37);
+            if (at == 128 * 100)
+            {
+                e.note (0, CLAP_EVENT_NOTE_CHOKE, 60), e.note (0, CLAP_EVENT_NOTE_CHOKE, 37);
+                e.note (0, CLAP_EVENT_NOTE_OFF, 60), e.note (0, CLAP_EVENT_NOTE_OFF, 37);
+                for (uint8_t ch = 0; ch < 16; ++ch)
+                    e.midi (0, (uint8_t) (0xb0 | ch), 120, 0), e.midi (0, (uint8_t) (0xb0 | ch), 123, 0);
+            }
+            if (at == 128 * 300) e.note (0, CLAP_EVENT_NOTE_ON, 45);
+        });
+        const auto hits = onsets (l);
+        CHECK (rms (l, 6000, 2400) > 0.1 && rms (l, 25000, 2400) < 1e-4 && rms (l, 48000, 2400) < 1e-4);
+        CHECK (hits.size() == 2 && hits[1] >= 38400 && hits[1] < 38400 + 48);
+    }
+    // The same output whatever the block size, with pads inside blocks: playing (two pads on one frame, a MIDI pad, a
+    // note that transposes, Run off and a pad as a note, Run on again) and stopped.
+    {
+        auto patch = [] (Instance& a) {
+            return Values { { "VCO 1 Wave", 1.0 }, { "VCO 2 Wave", 0.0 }, { "VCO 1 Sub 2 Level", 0.5 }, { "VCO 2 Sub 1 Level", 0.4 }, { "Seq 1 > Sub 1", 1.0 },
+                            { "Seq 2 > Sub 2", 1.0 }, { "Rhythm 3 > Seq 1", 1.0 }, { "Rhythm 4 > Seq 2", 1.0 }, { "Resonance", 0.7 },
+                            { "Clock Div", a.valueOf ("Clock Div", "1/32") } };
+        };
+        auto events = [] (Instance* a) {
+            return [a] (uint64_t at, uint32_t n, Events& e) {
+                for (uint64_t when : { 20001ull, 45000ull, 61111ull, 63000ull, 70000ull, 75000ull, 80000ull, 85000ull, 88000ull, 90000ull })
+                    if (when >= at && when < at + n)
+                    {
+                        const uint32_t t = (uint32_t) (when - at);
+                        switch (when)
+                        {
+                            case 20001: e.note (t, CLAP_EVENT_NOTE_ON, 37); break;
+                            case 45000: e.note (t, CLAP_EVENT_NOTE_ON, 39), e.note (t, CLAP_EVENT_NOTE_ON, 42); break;
+                            case 61111: e.midi (t, 0x90, 51, 100); break;
+                            case 63000: e.midi (t, 0x80, 51, 0); break;
+                            case 70000: e.note (t, CLAP_EVENT_NOTE_ON, 67); break;
+                            case 75000: e.note (t, CLAP_EVENT_NOTE_OFF, 67); break;
+                            case 80000: e.param (t, a->id ("Run"), 0.0); break;
+                            case 85000: e.note (t, CLAP_EVENT_NOTE_ON, 40); break;
+                            case 88000: e.param (t, a->id ("Run"), 1.0); break;
+                            default: e.note (t, CLAP_EVENT_NOTE_ON, 44); break;
+                        }
+                    }
+            };
+        };
+        auto t = [] (uint64_t at) { return playingFrom (0.0, 133.0, 48000.0, at); };
+        std::vector<float> l128, r128, s128;
+        auto stoppedRun = [&] (uint32_t block, std::vector<float>& out) {
+            Instance a;
+            a.setup (stepPatch (a, {}));
+            std::vector<float> right;
+            a.render (28800, block, out, right, still, [&] (uint64_t at, uint32_t n, Events& e) {
+                for (uint64_t when : { 1000ull, 13001ull, 20000ull, 24999ull })
+                    if (when >= at && when < at + n)
+                    {
+                        const uint32_t f = (uint32_t) (when - at);
+                        if (when == 13001) e.note (f, CLAP_EVENT_NOTE_ON, 38), e.note (f, CLAP_EVENT_NOTE_ON, 43);
+                        else if (when == 20000) e.param (f, a.id ("Next"), 1.0);
+                        else e.note (f, CLAP_EVENT_NOTE_ON, when == 1000 ? 41 : 47);
+                    }
+            });
+        };
+        {
+            Instance a;
+            a.setup (patch (a));
+            a.render (96000, 128, l128, r128, t, events (&a));
+            stoppedRun (128, s128);
+        }
+        for (uint32_t block : { 37u, 1u, 4096u })
+        {
+            Instance a;
+            a.setup (patch (a));
+            a.render (96000, block, l, r, t, events (&a));
+            CHECK (l == l128 && r == r128);
+            stoppedRun (block, l2);
+            CHECK (l2 == s128);
+        }
+        CHECK (rms (s128, 13001, 4800) > 0.01);
+    }
+}
+
 void testExtremes()
 {
     // Random settings, every one in its range: the output stays a number and within full scale.
@@ -1374,6 +1694,7 @@ int main (int argc, char** argv)
     testBlockSizes();
     testPitch();
     testEnvelopesAndNotes();
+    testStepPads();
     testExtremes();
     demos (argv[2]);
     entry->deinit();

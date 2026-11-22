@@ -7,6 +7,8 @@
 //   4 rhythm generators (the clock divided by 1 to 16) ──OR / XOR──► SEQ 1 and SEQ 2 (4 steps each)
 //   SEQ 1 ──► VCO 1's pitch and/or its subs' divisors; SEQ 2 the same for VCO 2
 //   every step of either sequencer ──► both EGs (EG On)
+//   Run on: notes 36-51 (the pads) ──► a step of SEQ 1 or SEQ 2 shown without moving it, both EGs; other notes ──►
+//   both VCOs' pitch from middle C and a gate on both EGs (Run off: every note)
 //
 // The clock is the host's: one every Clock Div from the song's top while the host plays. Rhythm generator n fires
 // on every Rhythm n-th clock from the top (or from Reset), so all four line up on the downbeat.
@@ -427,7 +429,7 @@ public:
         clockedAt = -(int64_t (1) << 40); // no clock played yet
         clockedLoud = false;
         for (int s = 0; s < 2; ++s)
-            step[s] = 0, fresh[s] = true;
+            step[s] = 0, fresh[s] = true, shown[s] = -1;
         held = 0;
         transpose = 0.0f;
         gated = false;
@@ -453,13 +455,14 @@ public:
     }
 
     // Reset: both sequencers to step 1 and the rhythm generators to their start, from the next clock. Next: both
-    // sequencers on a step, without the EGs. Trigger: both EGs, without moving (not in EG: Hold).
+    // sequencers on a step, without the EGs. Both end a step pad's step. Trigger: both EGs, without moving (not in EG:
+    // Hold).
     void press (uint32_t id)
     {
         if (id == ParamId::reset)
         {
             for (int s = 0; s < 2; ++s)
-                step[s] = 0, fresh[s] = true;
+                step[s] = 0, fresh[s] = true, shown[s] = -1;
             rhythmPosition = 0;
             resetWanted = playing; // the generators count again from the next clock (on the grid it falls on)
             snapPitch();
@@ -467,17 +470,34 @@ public:
         else if (id == ParamId::next)
         {
             for (int s = 0; s < 2; ++s)
-                step[s] = (step[s] + 1) & 3;
+                step[s] = (step[s] + 1) & 3, shown[s] = -1;
             snapPitch();
         }
         else if (egMode() != 2)
             vcfEg.trigger(), vcaEg.trigger();
     }
 
-    // A MIDI note: both VCOs move by its distance from middle C (the panel's 1 V/octave input, normalled to both) and
-    // stay there after it ends; the EGs start and hold at the top while any note is down. The last note held wins.
+    // A MIDI note. While Run is on, the pads of a Melodee plug-in track (notes 36 to 51 at its defaults, rows of four
+    // from the bottom) are the steps: 36-39 Seq 1's steps 1-4, 40-43 Seq 2's, 44-51 the same again. A step pad shows
+    // its step on that sequencer's outputs as the sequencer stepping onto it would (the step's value, quantized, at
+    // the current transposition), without moving the sequencer, until that sequencer's next step at a clock, Reset or
+    // Next; and it starts both EGs as Trigger does (not in EG: Hold). One-shot: it holds no gate and never transposes,
+    // and it never joins the keys held below, so its note off finds nothing to end (only the same key held as a note
+    // before Run went on, which that off lets go of).
+    // Every other note, and every note with Run off: both VCOs move by its distance from middle C (the panel's
+    // 1 V/octave input, normalled to both) and stay there after it ends; the EGs start and hold at the top while any
+    // note is down. The last note held wins.
     void noteOn (int key)
     {
+        if (knob[ParamId::run] >= 0.5f && key >= firstPad && key < firstPad + 16)
+        {
+            const int pad = key - firstPad;
+            shown[(pad >> 2) & 1] = pad & 3;
+            snapPitch();
+            if (egMode() != 2)
+                vcfEg.trigger(), vcaEg.trigger();
+            return;
+        }
         noteOff (key);
         if (held == maxHeld)
             std::memmove (keys, keys + 1, sizeof (int) * (maxHeld - 1)), --held;
@@ -609,6 +629,7 @@ private:
                     fresh[s] = false;
                 else
                     step[s] = (step[s] + 1) & 3;
+                shown[s] = -1; // a step pad's step gives way to the sequencer's
                 moved = true;
             }
         if (! moved)
@@ -714,7 +735,8 @@ private:
         for (int n = 0; n < 2; ++n)
         {
             const uint32_t at = n == 0 ? 0u : 1u; // sequencer n plays VCO n
-            const float stepped = knob[(at ? seq2Step1 : seq1Step1) + step[n]] * octaves;
+            const int on = shown[n] >= 0 ? shown[n] : step[n]; // a step pad's step, else the sequencer's
+            const float stepped = knob[(at ? seq2Step1 : seq1Step1) + on] * octaves;
             // The VCO: its knob, the step (when assigned) and the note, quantized together; then Fine Tune.
             const float pitch = knob[at ? vco2Freq : vco1Freq] * vcoOctaves + (knob[at ? seq2Osc : seq1Osc] >= 0.5f ? stepped : 0.0f)
                               + transpose * (1.0f / 12.0f);
@@ -845,6 +867,7 @@ private:
     bool clockedLoud = false; // the last clock played started the EGs
     bool fresh[2] { true, true };
     int step[2] {};
+    int shown[2] { -1, -1 }; // the step a step pad put on each sequencer's outputs (-1: the sequencer's own)
     int keys[maxHeld] {};
     int held = 0;
     int64_t lastClock = -1, origin = 0, rhythmPosition = 0;

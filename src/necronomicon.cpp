@@ -178,8 +178,9 @@ bool paramsFromText (const clap_plugin* plugin, clap_id id, const char* text, do
     return true;
 }
 
-// One event: parameter values go to the engine at once; notes move the pitch and gate the EGs. A button's release
-// is sent back stamped no later than `lastFrame` (an event stamped past the block is applied at its end).
+// One event: parameter values go to the engine at once; notes move the pitch and gate the EGs, or play a step (notes
+// 36-51 while Run is on: Engine::noteOn). A button's release is sent back stamped no later than `lastFrame` (an event
+// stamped past the block is applied at its end).
 void handle (Plugin& p, const clap_event_header* e, const clap_output_events* out, uint32_t lastFrame)
 {
     if (e->space_id != CLAP_CORE_EVENT_SPACE_ID)

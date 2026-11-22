@@ -18,7 +18,8 @@ VCO 1, its subs, VCO 2, its subs ──► mixer (six levels; overdrives when ho
 host clock (Clock Div) ──► RHYTHM 1 … 4 (every 1st … 16th clock) ──OR / XOR──► SEQ 1 and / or SEQ 2 (4 steps each)
 SEQ 1 ──► VCO 1's pitch and / or its subs' divisors        SEQ 2 ──► the same for VCO 2
 every step of either sequencer ──► both EGs (EG: On)
-MIDI note ──► both VCOs' pitch (from middle C) and a gate on both EGs
+Run on: notes 36–51 (pads 1–16) ──► a step of SEQ 1 or SEQ 2, heard without moving the sequencer, and both EGs
+any other note (every note with Run off) ──► both VCOs' pitch (from middle C) and a gate on both EGs
 ```
 
 A subharmonic counts its VCO's cycles, so it stays locked to it in phase whatever the VCO does: VCO 1 at C and its
@@ -58,16 +59,35 @@ The public controls, in host parameter order.
 | Rhythm 1 > Seq 1 … Rhythm 4 > Seq 2 | each RHYTHM's SEQ 1 and SEQ 2 buttons | Off / On: the sequencers it moves |
 | Rhythm Logic | Rhythm Generator Logic (a MIDI setting on the panel) | **OR**: a sequencer moves when any of its generators fires. **XOR**: only when exactly one does (two together cancel) |
 | Clock Div | TEMPO (replaced) | 1/2 … 1/64 of a beat, with triplets: the clock the generators divide (1/16 is four a beat, the panel's own clock under MIDI clock) |
-| Run | PLAY | Stop / Run: with Run off the host plays but the sequencers hold and nothing fires |
+| Run | PLAY | Stop / Run: with Run off the host plays but the sequencers hold and nothing fires. Run also decides what the pads do: on, pads 1–16 play the steps; off, they play notes (below) |
 | Reset | RESET | both sequencers to step 1 and the generators to their start: the next clock fires every routed generator and plays step 1 |
 | Next | NEXT | both sequencers on one step, without the EGs |
 | Trigger | TRIGGER | both EGs at once, without moving the sequencers (not during an attack; nothing in EG: Hold) |
 | Fine Tune | OSC 1 + OSC 2 held, TEMPO turned | ±50 cents on both VCOs |
 
-A MIDI note (a pad or key on a Melodee plug-in track) moves both VCOs by its distance from middle C (note 60), as the
-panel's VCO 1 input does (normalled to VCO 2), and holds both EGs at the top while it is down. The pitch stays where
-the last note put it, so playing pads transposes the running pattern; with EG: Off and the transport stopped, the
-pads play it like a monophonic keyboard.
+### Pads and notes
+
+**Sequencer on (Run: Run), pads 1–16 play the steps; off (Run: Stop), the pads play notes.** On a Melodee plug-in
+track at its defaults (octave 2, key C, Chromatic) pads A01–A16 send notes 36–51, pad 1 at the bottom left. Since
+0.2.0:
+
+- **Run on, whether or not the song plays:** each pad is a step. The bottom row (notes 36–39) is Seq 1's steps 1–4,
+  the second row (40–43) Seq 2's steps 1–4, and the top two rows (44–51) the same again. A pad plays its step as the
+  sequencer would on reaching it: the step's value goes to wherever that sequencer is routed (its VCO's pitch, its
+  subs' divisors), quantized, at the current transposition, and both EGs start as Trigger starts them (in EG: Off
+  too; in EG: Hold the drone just moves). The sequencer itself does not move: its next step at a clock (or Reset,
+  or Next) takes over again, and the pattern carries on where it was. A pad plays once (letting go of it does
+  nothing) and never transposes. Two pads on one frame: one of each sequencer both apply; two of one sequencer, the
+  later wins; the EGs start once. A pad on the very frame a clock steps its sequencer gives way to that step.
+- **Run on, any note outside 36–51** does what every note did before: it moves both VCOs by its distance from middle C
+  (note 60), as the panel's VCO 1 input does (normalled to VCO 2), and holds both EGs at the top while it is down. The
+  pitch stays where the last note put it, so playing those notes transposes the running pattern (and the pads' steps
+  with it).
+- **Run off:** every note, the pads included, works that way: with EG: Off and the transport stopped, the pads play
+  the synth like a monophonic keyboard.
+
+A note off, a choke, and Melodee's All Notes Off / All Sound Off (CC 123 / 120) end only notes held as notes: a
+pad's step is never held, so they never touch it, and a pad's note off never ends another held note.
 
 ## Presets
 
@@ -105,8 +125,9 @@ same samples as the demo's list.
   no clock played twice, a clock passed played at once.
 - Clock Div changed while playing: the clocks count on the new grid from there; one due on that frame plays.
 - Run off: the host plays but the sequencers hold their steps and nothing fires; Next, Reset and Trigger work as on
-  the panel. Reset while playing restarts the generators from the next clock (a Clock Div change after it keeps that
-  moment), until the next Play or jump lines them up with the song again.
+  the panel, and the pads play notes (Pads and notes, above). Reset while playing restarts the generators from the
+  next clock (a Clock Div change after it keeps that moment), until the next Play or jump lines them up with the song
+  again.
 - In Melodee, keep the plug-in's **TRANSPORT** on (the default): with it off the plug-in never hears Play.
 
 ## Where values were inferred
@@ -131,6 +152,7 @@ are chosen to match what is documented:
 
 Deviations: Trigger is a trigger in EG: Off as in On (on the panel it is a gate there; a plug-in button cannot be
 held, so the gate is left to MIDI notes, which hold the EGs as a gate does); notes carry no velocity, as on the panel.
+The pads as steps (Run on, notes 36–51) are this plug-in's own: the panel has no pads.
 
 Left out on purpose: the patch bay, the external clock, MIDI CCs, the PWM input and the SEQ OCT / QUANTIZE output
 settings (there are no outputs), and the panel's TEMPO (the clock is the host's; 1/64 is the fastest).
@@ -180,12 +202,22 @@ on a downbeat, Reset and Clock Div in one block;
 the same output whatever the block size (1, 37, 128, 4096 frames); the VCO range, each quantizer, Fine Tune; Next,
 Reset, the steps on the VCO and on a sub's divisor, a sub following its VCO, Seq 2 on VCO 2, each wave's pitch;
 EG Off with Trigger, EG Hold and back, notes (CLAP, MIDI, a choke, a note off for any key) gating the EGs and moving
-the pitch, Reset while playing; a preset loaded while playing heard exactly as its values sent as events; and finite,
-bounded output at 60 random and extreme settings, never stuck at the ceiling (what a NaN inside would give).
+the pitch, Reset while playing; the pads as steps (Run on): each of the 16 pads, as a CLAP note and as MIDI, in EG: On,
+Off and Hold, the same output to the bit as Next pressed up to its step with Trigger, after a note has transposed;
+the sequencer not moved by a pad (stopped: Next then goes to the next step from where it was; playing: the next clock
+plays the step it would have), a pad on Play's frame (mid-song it holds until the next clock; from the top the clock
+on that frame takes over), a sequencer no generator moves keeping a pad's step, two pads on one frame (of one
+sequencer the later wins, of both both apply, one hit), on, on, off of one pad (two hits, nothing held), a pad and its
+off under a held note, a choke and a CC 120/123 storm on every channel, notes 35 and 52 still transposing and gating
+and the pads keeping that transposition, Run off (the pads notes again, held as a gate) and on again, and the same
+output with pads inside blocks of 1, 37, 128 and 4096 frames, playing and stopped; a preset loaded while playing heard
+exactly as its values sent as events; and finite, bounded output at 60 random and extreme settings, never stuck at the
+ceiling (what a NaN inside would give).
 
-`tests/fingerprint.cpp` then renders 47 fixed scenarios (each preset, the bench's patches, 24 random patches with the
+`tests/fingerprint.cpp` then renders 49 fixed scenarios (each preset, the bench's patches, 24 random patches with the
 buttons, notes and knobs moving, other block sizes and rates, stop and jumps, each quantizer and wave, notes while it
-plays, XOR switched while it plays, a loop wrapping inside a block in whole blocks and in parts) and hashes every output sample's bits against `tests/fingerprint.txt`: work
+plays, XOR switched while it plays, a loop wrapping inside a block in whole blocks and in parts, the pads as steps
+playing and stopped) and hashes every output sample's bits against `tests/fingerprint.txt`: work
 meant to keep the sound, such as a speed-up, must leave every hash as it is. A change meant to change the sound
 updates them with `make fingerprint-update` (run inside the build image). The hashes hold for Melodee's build image
 and these compiler flags.
@@ -194,4 +226,7 @@ and these compiler flags.
 
 Copy `build/Necronomicon.clap` to `Melodee/Plugins/hdslave/hdslave Necronomicon.clap` on the card (or the staged
 card's folder), then pick it on an empty track: Stage, Plugin, hdslave, hdslave Necronomicon. It needs only libc and libm, glibc 2.35 or
-newer (the MPC has 2.39); the build is 199 KB.
+newer (the MPC has 2.39); the build is about 1.2 MB.
+
+Not yet run on the MPC itself: version 0.2.0 has been loaded and played only by hdslaveOS's own CLAP host code
+(`clap_check`, in the Linux build image) and by the tests above.
