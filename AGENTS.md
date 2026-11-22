@@ -46,3 +46,4 @@ Read `../AGENTS.md`, then `../Workflow/plugins.md` and `../Workflow/host-facts.m
   - an FFT aliasing check below −45 dB for every output.
 - Subharmonics count oscillator cycles. A new divisor takes effect at the next wrap of the oscillator.
 - When Seq Oct changes, the step text is rescanned on the main thread through `request_callback`.
+- **Pads.** While Run is Run (playing or stopped), notes 36-51 are steps: 36-39 Seq 1, 40-43 Seq 2, 44-51 the same again. `Engine::shown[]` shows the step until that sequencer's next clock step, Reset or Next, without moving `step[]`, and starts both EGs as Trigger does. Pads never join the held-key list. Other notes, and every note with Run off, transpose and gate as before. `testStepPads` in `tests/host.cpp` holds it.
