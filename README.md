@@ -1,13 +1,12 @@
-# Necronomicon
+# hdslave Necronomicon
 
-A polyrhythmic subharmonic synthesizer as a CLAP plug-in, built for the Akai MPC Sample running Melodee (64-bit ARM
-Linux, Cortex-A55). Hosts list it as **hdslave Necronomicon** (id `com.hdslave.necronomicon`). It follows the front panel
-and normalled signal flow of the Moog Subharmonicon, without the patch bay: two VCOs, each with two subharmonic
-oscillators that divide its frequency by 1 to 16, a ladder filter, two AD envelopes, two 4-step sequencers, and four
-rhythm generators that clock the sequencers in polyrhythms.
+**A polyrhythmic subharmonic synthesizer (Subharmonicon panel & flow) as a CLAP plug-in for the Akai MPC Sample.**
 
-The rhythm generators divide the host's clock: they play while the host plays, stop when it stops, and line up with
-the song's place when it starts or jumps.
+![Necronomicon Liquid Light stained-glass rhythm wheels running in hdslaveOS](docs/necronomicon-screen.gif)
+
+Built for the Akai MPC Sample running [Melodee](https://github.com/keremimo/melodee-sample) / [hdslaveOS](https://github.com/hdslave/hdslaveOS) (64-bit ARM Linux, Cortex-A55). Hosts list it as **hdslave Necronomicon** (id `com.hdslave.necronomicon`). It follows the front panel and normalled signal flow of the Moog Subharmonicon (without the patch bay): two VCOs, each with two phase-locked subharmonic dividers (1/1 to 1/16), a 4-pole ladder filter, two AD envelopes, two 4-step sequencers, and four polyrhythmic rhythm generators with OR/XOR logic.
+
+The rhythm generators divide the host clock — playing on the song's grid, stopping on stop, and staying aligned through song jumps. Under **hdslaveOS**, Necronomicon draws its animated **Liquid Light** screen with four stained-glass rhythm wheels tracking each divisor's phase and sequencer routing in real time.
 
 ## Signal flow
 
