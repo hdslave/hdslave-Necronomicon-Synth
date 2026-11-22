@@ -193,6 +193,6 @@ and these compiler flags.
 
 ## Install
 
-Copy `build/Necronomicon.clap` to `Melodee/Plugins/hdslave Necronomicon/hdslave Necronomicon.clap` on the card (or the staged
-card's folder), then pick it on an empty track: Stage, Plugin, hdslave Necronomicon. It needs only libc and libm, glibc 2.35 or
+Copy `build/Necronomicon.clap` to `Melodee/Plugins/hdslave/hdslave Necronomicon.clap` on the card (or the staged
+card's folder), then pick it on an empty track: Stage, Plugin, hdslave, hdslave Necronomicon. It needs only libc and libm, glibc 2.35 or
 newer (the MPC has 2.39); the build is 199 KB.

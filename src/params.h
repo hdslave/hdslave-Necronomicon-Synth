@@ -10,7 +10,7 @@
 #include <strings.h>
 
 #ifndef NECRONOMICON_VERSION
-#define NECRONOMICON_VERSION "0.1.3"
+#define NECRONOMICON_VERSION "0.1.4"
 #endif
 
 namespace necronomicon
