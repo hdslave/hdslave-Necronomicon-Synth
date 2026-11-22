@@ -109,6 +109,7 @@ struct Transport
     bool playing = true;
     double bpm = 120.0, beats = 0.0;
     bool placed = true; // the host gives a song position (it may be negative: a count-in)
+    uint16_t numerator = 0, denominator = 4;
 };
 const Transport stopped { false, 120.0, 0.0 };
 
@@ -200,6 +201,15 @@ struct Instance
             tr.flags = CLAP_TRANSPORT_HAS_TEMPO | (t.placed ? CLAP_TRANSPORT_HAS_BEATS_TIMELINE : 0) | (t.playing ? CLAP_TRANSPORT_IS_PLAYING : 0);
             tr.tempo = t.bpm;
             tr.song_pos_beats = (clap_beattime) std::llround (t.beats * (double) CLAP_BEATTIME_FACTOR);
+            if (t.numerator)
+            {
+                tr.flags |= CLAP_TRANSPORT_HAS_TIME_SIGNATURE;
+                tr.tsig_num = t.numerator;
+                tr.tsig_denom = t.denominator;
+                const double barBeats = 4.0 * t.numerator / t.denominator;
+                tr.bar_number = int32_t (std::floor (t.beats / barBeats));
+                tr.bar_start = clap_beattime (std::llround (tr.bar_number * barBeats * CLAP_BEATTIME_FACTOR));
+            }
             Events e;
             if (events)
                 events (at, n, e);
@@ -1076,16 +1086,16 @@ void testScreen()
     CHECK (screen != nullptr);
     if (!screen) return;
     constexpr unsigned stride = 327;
-    constexpr uint32_t sentinel = 0x2468acdf, active = 0xff7effbd, paper = 0xfffff2e6;
+    constexpr uint32_t sentinel = 0x2468acdf, litKey = 0xffffc59a, paper = 0xfffff2e6;
     std::vector<uint32_t> pixels (stride * 218, sentinel);
     melodee_screen_canvas_t c {};
-    c.pixels = pixels.data(); c.width = 320; c.height = 218; c.stride = stride; c.now_ms = 1000;
+    c.pixels = pixels.data(); c.width = 320; c.height = 218; c.stride = stride;
     for (auto& k : c.knobs) k = { -1, true };
     auto paint = [&](bool whole = false) { c.whole = whole; return screen->paint (a.plugin, &c); };
     auto in = [&](uint32_t kind, int v = 0) { melodee_screen_input_t e { kind, v, false }; return screen->input (a.plugin, &e); };
     auto knobs = [&] { std::array<clap_id,3> ids {}; screen->knobs (a.plugin, ids.data()); return ids; };
     auto pixel = [&](int x, int y) { return pixels[y * stride + x]; };
-    auto step = [&](int lane, int n) { return pixel (49 + lane * 157 + n * 24, 153) == active; };
+    auto step = [&](int lane, int n) { return pixel (58 + lane * 159 + n * 25, 160) == litKey; };
     std::vector<float> l, r;
     auto block = [&](double beat, bool playing, OutEvents* out = nullptr) {
         a.render (128, 128, l, r, [&](uint64_t) { return Transport { playing, 120.0, beat }; }, {}, out);
@@ -1098,6 +1108,42 @@ void testScreen()
             if (x < 320) filled &= pixel (x,y) != sentinel;
             else padding &= pixel (x,y) == sentinel;
     CHECK (filled && padding);
+    // The static serif and idle rhythm page need no periodic repaint.
+    const auto still = pixels;
+    const int idleRequests = screenRequests;
+    c.now_ms = 1920;
+    CHECK (!paint() && screenRequests == idleRequests && pixels == still);
+    CHECK (paint (true) && pixels == still);
+    auto changed = [&](const std::vector<uint32_t>& prior, int x, int y, int w, int h) {
+        for (int j = y; j < y + h; ++j)
+        {
+            const int start = j * int (stride) + x;
+            if (!std::equal (pixels.begin() + start, pixels.begin() + start + w, prior.begin() + start)) return true;
+        }
+        return false;
+    };
+    for (int g = 0; g < 4; ++g)
+    {
+        const int cx = 43 + 78 * g;
+        CHECK (!changed (still, cx - 16, 70, 32, 32)); // stopped transport holds the wheel glass
+        CHECK (pixel (cx, 60) == paper);
+    }
+    CHECK (!changed (still, 0, 36, stride, 182)); // the chrome panel stays still on stopped transport
+    const auto animated = pixels;
+    CHECK (paint (true) && pixels == animated);
+    auto routeThird = [&](int first, int second) {
+        Events input; OutEvents output;
+        a.set (input, "Rhythm 3 > Seq 1", first);
+        a.set (input, "Rhythm 3 > Seq 2", second);
+        a.params->flush (a.plugin, &input.in, &output.out);
+        CHECK (paint());
+    };
+    routeThird (1, 0);
+    CHECK (changed (animated, 183, 70, 32, 32));
+    const auto routed = pixels;
+    routeThird (1, 1); CHECK (!changed (routed, 183, 70, 32, 32));
+    routeThird (0, 1); CHECK (!changed (routed, 183, 70, 32, 32));
+    routeThird (0, 0); CHECK (pixels == animated);
     CHECK (!in (99));
     CHECK (!in (MELODEE_SCREEN_NUDGE, -1));
     CHECK ((knobs() == std::array<clap_id,3> { a.id ("Rhythm 1"), a.id ("Rhythm 1 > Seq 1"), a.id ("Rhythm 1 > Seq 2") }));
@@ -1124,8 +1170,7 @@ void testScreen()
     CHECK (pixel (199,60) == paper && pixel (66,99) == paper);
     c.now_ms += 60; CHECK (paint());
     c.now_ms += 200; paint();
-    const int resting = screenRequests;
-    CHECK (!paint() && screenRequests == resting);
+    CHECK (!paint()); // no pixels changed twice at the same timestamp
     // At clock twelve, generators 1 and 2 pulse, and both stars return to the top.
     block (3.0, true); CHECK (paint());
     CHECK (pixel (43,60) == paper && pixel (121,60) == paper);
@@ -1135,6 +1180,16 @@ void testScreen()
     CHECK (in (MELODEE_SCREEN_WHEEL, 4) && knobs()[0] == CLAP_INVALID_ID); // Next
     a.plugin->reset (a.plugin); block (0.0, false); paint();
     CHECK (step (0,0) && step (1,0));
+    c.now_ms = 0; paint();
+    const auto clockPage = pixels;
+    c.now_ms = 2000; CHECK (paint() && changed (clockPage, 168, 92, 28, 20)); // held glance
+    c.now_ms = 5400; paint();
+    const auto openEye = pixels;
+    c.now_ms = 5760; CHECK (paint() && changed (openEye, 160, 90, 48, 24)); // lid shuts
+    c.now_ms = 6200; CHECK (paint() && !changed (openEye, 149, 90, 65, 24)); // reopens at the same gaze
+    CHECK (!changed (clockPage, 0, 36, stride, 54) && !changed (clockPage, 0, 114, stride, 104));
+    CHECK (!changed (clockPage, 0, 90, 149, 24) && !changed (clockPage, 214, 90, stride - 214, 24));
+    CHECK (!paint());
     const int asleep = processRequests;
     CHECK (in (MELODEE_SCREEN_PUSH) && processRequests > asleep);
     std::this_thread::sleep_for (std::chrono::milliseconds (550));
@@ -1162,6 +1217,48 @@ void testScreen()
             CHECK (std::find (reachable.begin(), reachable.end(), id) != reachable.end());
     CHECK (!in (MELODEE_SCREEN_NUDGE,1));
     c.width = 319; CHECK (!paint (true));
+}
+
+void testScreenColorClock()
+{
+    Instance a;
+    a.setup ({{ "Run", 0 }}); // Hold the playheads so the only moving pixels are the unrouted palettes.
+    const auto* screen = static_cast<const clap_plugin_melodee_screen*> (a.plugin->get_extension (a.plugin, CLAP_EXT_MELODEE_SCREEN));
+    if (!screen) { CHECK (screen != nullptr); return; }
+    std::vector<uint32_t> pixels (320 * 218);
+    melodee_screen_canvas_t c {};
+    c.pixels = pixels.data(); c.width = c.stride = 320; c.height = 218;
+    for (auto& k : c.knobs) k = { -1, true };
+    std::vector<float> l, r;
+    auto draw = [&](Transport t, uint32_t frames = 1) {
+        a.render (frames, 1024, l, r, [t](uint64_t) { return t; });
+        screen->paint (a.plugin, &c);
+    };
+    draw ({ true, 96, 0 });
+    const auto start = pixels;
+    const int beforeColor = screenRequests;
+    draw ({ true, 96, 8 });
+    const auto half = pixels;
+    CHECK (screenRequests > beforeColor);
+    for (int g = 0; g < 4; ++g)
+    {
+        const int cx = 43 + 78 * g;
+        unsigned changed = 0;
+        for (int y = 70; y < 102; ++y)
+            for (int x = cx - 16; x < cx + 16; ++x)
+                changed += start[320 * y + x] != half[320 * y + x];
+        CHECK (g < 2 ? changed == 0 : changed > 900);
+    }
+    draw ({ false, 96, 0 }); CHECK (pixels == half);
+    draw ({ true, 150, 16 }); CHECK (pixels == start);
+    draw ({ true, 150, -8 }); CHECK (pixels == half);
+    draw ({ true, 120, 6, true, 6, 8 }); CHECK (pixels == half);
+    draw ({ true, 120, 12, true, 6, 8 }); CHECK (pixels == start);
+
+    // A tempo-only host supplies no beat position. Change tempo halfway around.
+    draw (stopped);
+    draw ({ true, 96, 0, false }, 240000); CHECK (pixels == half);
+    draw ({ true, 150, 0, false }, 153600); CHECK (pixels == start);
 }
 
 void demos (const std::string& folder)
@@ -1255,6 +1352,7 @@ int main (int argc, char** argv)
     }
     factory = static_cast<const clap_plugin_factory*> (entry->get_factory (CLAP_PLUGIN_FACTORY_ID));
     testScreen();
+    testScreenColorClock();
     testPressWithPlay();
     testDescription();
     testParameters();

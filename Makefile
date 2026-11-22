@@ -27,7 +27,7 @@ CXXFLAGS += -I$(OUT)/ui
 .PHONY: all test bench clean fingerprint-update sanitize
 all: $(OUT)/Necronomicon.clap
 
-$(ART): tools/liquid_art.py assets/liquid-light/masthead.ppm assets/liquid-light/arches.ppm
+$(ART): tools/liquid_art.py assets/liquid-light/title-mask.pgm assets/liquid-light/silver-thorn.ppm assets/liquid-light/slipstream-eye.ppm assets/liquid-light/controls.ppm
 	@mkdir -p $(OUT)/ui
 	python3 tools/liquid_art.py $@
 

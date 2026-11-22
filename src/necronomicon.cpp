@@ -44,6 +44,7 @@ struct Plugin
     const clap_host_params* hostParams = nullptr;
     Screen screen;
     std::atomic<uint64_t> position { 0 }, outgoing { 0 };
+    std::atomic<int> colorStep { 0 };
     bool valuesMoved = false; // owned by process/flush
     // One producer (screen input), one consumer (process). Keep repeated presses in order,
     // with their individual timestamps, even if the host sleeps between them.
@@ -67,13 +68,13 @@ void repaint (Plugin& p)
     if (p.hostScreen && p.hostScreen->request_paint) p.hostScreen->request_paint (p.host);
 }
 
-void publishScreen (Plugin& p)
+void publishScreen (Plugin& p, bool colorsMoved = false)
 {
     if (!p.hostScreen) return;
     const uint64_t pos = p.engine.screenPosition();
     const bool moved = pos != p.position.load (std::memory_order_relaxed);
     if (moved) p.position.store (pos, std::memory_order_release);
-    if (moved || p.valuesMoved) repaint (p);
+    if (moved || p.valuesMoved || colorsMoved) repaint (p);
     p.valuesMoved = false;
 }
 
@@ -486,6 +487,17 @@ struct FlushDenormals
 #endif
 };
 
+int wheelColorStep (const clap_event_transport& t, double beat)
+{
+    const bool metered = (t.flags & CLAP_TRANSPORT_HAS_TIME_SIGNATURE) && t.tsig_num && t.tsig_denom;
+    const double barLength = metered ? 4.0 * t.tsig_num / t.tsig_denom : 4.0;
+    double bars = beat / barLength;
+    if (metered && (t.flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE))
+        bars = t.bar_number + (beat - double (t.bar_start) / CLAP_BEATTIME_FACTOR) / barLength;
+    const double turns = bars / 4.0;
+    return int (std::lround ((turns - std::floor (turns)) * colorCycleSteps)) % colorCycleSteps;
+}
+
 clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process* process)
 {
     auto& p = of (plugin);
@@ -551,7 +563,14 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
     }
     for (; next < count; ++next) // events stamped past the block (a host's mistake): applied at its end
         handle (p, in->get (in, next), process->out_events, lastFrame);
-    publishScreen (p);
+    bool colorsMoved = false;
+    if (p.hostScreen && process->transport && (process->transport->flags & CLAP_TRANSPORT_IS_PLAYING))
+    {
+        const int step = wheelColorStep (*process->transport, p.engine.ownPosition());
+        colorsMoved = step != p.colorStep.load (std::memory_order_relaxed);
+        if (colorsMoved) p.colorStep.store (step, std::memory_order_relaxed);
+    }
+    publishScreen (p, colorsMoved);
     // Never "sleep": the sequencers must hear the next Play, which is no event. (Melodee puts an idle instrument to
     // sleep itself, and the engine skips its own work while the VCA is closed.)
     return CLAP_PROCESS_CONTINUE;
@@ -562,8 +581,9 @@ bool screenPaint (const clap_plugin* plugin, const melodee_screen_canvas_t* c)
     if (!c || !c->pixels || c->width != hdui::width || c->height != hdui::height || c->stride < c->width || c->stride > INT32_MAX)
         return false;
     auto& p = of (plugin);
-    const bool drew = p.screen.paint (*c, p.values, p.position.load (std::memory_order_acquire));
-    if (p.screen.animating()) repaint (p); // finish the pulse even when the host skips silent blocks
+    const bool drew = p.screen.paint (*c, p.values, p.position.load (std::memory_order_acquire),
+                                      p.colorStep.load (std::memory_order_relaxed));
+    if (c->playing || p.screen.needsAnimation()) repaint (p);
     return drew;
 }
 
