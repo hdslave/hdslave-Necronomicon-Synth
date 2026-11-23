@@ -76,7 +76,8 @@ track at its defaults (octave 2, key C, Chromatic) pads A01â€“A16 send notes 36â
   sequencer would on reaching it: the step's value goes to wherever that sequencer is routed (its VCO's pitch, its
   subs' divisors), quantized, at the current transposition, and both EGs start as Trigger starts them (in EG: Off
   too; in EG: Hold the drone just moves). The sequencer itself does not move: its next step at a clock (or Reset,
-  or Next) takes over again, and the pattern carries on where it was. A pad plays once (letting go of it does
+  or Next, or a Play or jump lining the steps up with the song again) takes over, and the pattern carries on where
+  it was. A pad plays once (letting go of it does
   nothing) and never transposes. Two pads on one frame: one of each sequencer both apply; two of one sequencer, the
   later wins; the EGs start once. A pad on the very frame a clock steps its sequencer gives way to that step.
 - **Run on, any note outside 36â€“51** does what every note did before: it moves both VCOs by its distance from middle C
@@ -86,8 +87,10 @@ track at its defaults (octave 2, key C, Chromatic) pads A01â€“A16 send notes 36â
 - **Run off:** every note, the pads included, works that way: with EG: Off and the transport stopped, the pads play
   the synth like a monophonic keyboard.
 
-A note off, a choke, and Melodee's All Notes Off / All Sound Off (CC 123 / 120) end only notes held as notes: a
-pad's step is never held, so they never touch it, and a pad's note off never ends another held note.
+A note off, a choke for one key, and Melodee's All Notes Off (CC 123) end only notes held as notes: a pad's step
+is never held, so they never touch it, and a pad's note off never ends another held note. All Sound Off (CC 120,
+or a choke for every key) is the exception: it silences the voice at once, an EG: Hold drone included, until a
+note, Trigger or an EG change sounds again.
 
 ## Presets
 
@@ -211,8 +214,11 @@ sequencer the later wins, of both both apply, one hit), on, on, off of one pad (
 off under a held note, a choke and a CC 120/123 storm on every channel, notes 35 and 52 still transposing and gating
 and the pads keeping that transposition, Run off (the pads notes again, held as a gate) and on again, and the same
 output with pads inside blocks of 1, 37, 128 and 4096 frames, playing and stopped; a preset loaded while playing heard
-exactly as its values sent as events; and finite, bounded output at 60 random and extreme settings, never stuck at the
-ceiling (what a NaN inside would give).
+exactly as its values sent as events; All Sound Off silencing a Hold drone (All Notes Off not touching it), a pad's
+step ending at a song jump, a mid-grid Play landing the same at every block size, a page press the host slept on,
+hostile tempos (0, 2000, infinite) and sample rates, a state from a newer version refused, nan/inf text refused;
+and finite, bounded output at 60 random and extreme settings, never stuck at the ceiling (what a NaN inside would
+give).
 
 `tests/fingerprint.cpp` then renders 49 fixed scenarios (each preset, the bench's patches, 24 random patches with the
 buttons, notes and knobs moving, other block sizes and rates, stop and jumps, each quantizer and wave, notes while it
@@ -228,5 +234,5 @@ Copy `build/Necronomicon.clap` to `Melodee/Plugins/hdslave/hdslave Necronomicon.
 card's folder), then pick it on an empty track: Stage, Plugin, hdslave, hdslave Necronomicon. It needs only libc and libm, glibc 2.35 or
 newer (the MPC has 2.39); the build is about 1.2 MB.
 
-Not yet run on the MPC itself: version 0.2.0 has been loaded and played only by hdslaveOS's own CLAP host code
+Not yet run on the MPC itself: version 0.2.1 has been loaded and played only by hdslaveOS's own CLAP host code
 (`clap_check`, in the Linux build image) and by the tests above.
