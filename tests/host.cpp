@@ -1661,10 +1661,11 @@ void demos (const std::string& folder)
 }
 } // namespace
 
-// Verified review fixes (0.2.1): All Sound Off silences an EG: Hold drone, the tempo is clamped to a finite
-// 1-1000 BPM (an infinite tempo must not hang the render loop), a mid-grid Play lands the same at every block
-// size, a step pad's step does not survive a song jump, a page press older than half a second still fires, a
-// state from a newer version is refused, and nan/inf text is refused.
+// Verified review fixes (0.2.1): All Sound Off silences an EG: Hold drone (while playing in EG: On, the next
+// sequencer step sounds again), the tempo is clamped to a finite 1-1000 BPM (an infinite tempo must not hang
+// the render loop), a mid-grid Play lands the same at every block size, a step pad's step does not survive a
+// song jump, a page press older than half a second still fires, a state from a newer version is refused, and
+// nan/inf text is refused.
 void testVerifiedFixes()
 {
     std::vector<float> l, r, l2, r2;
@@ -1697,6 +1698,34 @@ void testVerifiedFixes()
         CHECK (silent);
         if (mode == 0)
             CHECK (rms (l, 30000, 2400) > 0.05 && rms (l, 44000, 2400) > 0.05);
+    }
+    // Panic while playing in EG: On silences what sounds at once, and the next sequencer step (eighth-note
+    // clocks at 120 BPM: frames 0, 12000, 24000, ...) sounds again: the sequencer keeps running.
+    {
+        Instance a;
+        a.setup (clickPatch (a));
+        a.render (48000, 128, l, r, [] (uint64_t at) { return playingFrom (0.0, 120.0, 48000.0, at); },
+                  [&] (uint64_t at, uint32_t, Events& e) { if (at == 128 * 100) e.midi (0, 0xb0, 120, 0); });
+        CHECK (rms (l, 12000, 800) > 0.01);
+        bool silent = true;
+        for (size_t i = 128 * 100; i < 24000 && i < l.size(); ++i)
+            silent &= l[i] == 0.0f && r[i] == 0.0f;
+        CHECK (silent);
+        CHECK (rms (l, 24000, 2400) > 0.01);
+    }
+    // Trigger sounds an EG: Hold drone again after a panic (it otherwise does nothing in Hold).
+    {
+        Instance a;
+        a.setup (dronePatch (a));
+        a.render (48000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 100) e.midi (0, 0xb0, 120, 0);
+            if (at == 128 * 200) a.set (e, "Trigger", 1.0);
+        });
+        bool silent = true;
+        for (size_t i = 128 * 100; i < 128 * 200 && i < l.size(); ++i)
+            silent &= l[i] == 0.0f && r[i] == 0.0f;
+        CHECK (silent);
+        CHECK (rms (l, 30000, 2400) > 0.05 && rms (l, 44000, 2400) > 0.05);
     }
     // A pad's step ends at a song jump: pad step 3 (G5 in the drone patch) while playing, then a jump; what
     // sounds after the jump is the sequencer's own step 1 (C5), not the pad's step.
@@ -1817,6 +1846,7 @@ void testVerifiedFixes()
         const auto fast = at (1000.0, 1000.0);
         CHECK (rms (fast, 0, 24000) > 0.001);
         CHECK (at (2000.0, 1000.0) == fast);
+        CHECK (at (0.0, 120.0) == at (120.0, 120.0));
         CHECK (at (std::numeric_limits<double>::quiet_NaN(), 120.0) == at (120.0, 120.0));
         CHECK (at (std::numeric_limits<double>::infinity(), 1000.0) == fast); // must terminate
     }
