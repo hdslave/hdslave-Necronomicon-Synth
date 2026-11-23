@@ -461,8 +461,8 @@ public:
     }
 
     // Reset: both sequencers to step 1 and the rhythm generators to their start, from the next clock. Next: both
-    // sequencers on a step, without the EGs. Both end a step pad's step. Trigger: both EGs, without moving (not in EG:
-    // Hold).
+    // sequencers on a step, without the EGs. Both end a step pad's step. Trigger: both EGs, without moving (in EG:
+    // Hold, only sounds the drone again after a panic).
     void press (uint32_t id)
     {
         if (id == ParamId::reset)
@@ -493,8 +493,8 @@ public:
     // from the bottom) are the steps: 36-39 Seq 1's steps 1-4, 40-43 Seq 2's, 44-51 the same again. A step pad shows
     // its step on that sequencer's outputs as the sequencer stepping onto it would (the step's value, quantized, at
     // the current transposition), without moving the sequencer, until that sequencer's next step at a clock, Reset,
-    // Next, or a Play or jump lining the steps up with the song again; and it starts both EGs as Trigger does (not
-    // in EG: Hold). One-shot: it holds no gate and never transposes,
+    // Next, or a Play or jump lining the steps up with the song again; and it starts both EGs as Trigger does (in
+    // EG: Hold, no new attack: the drone moves, and sounds again after a panic). One-shot: it holds no gate and never transposes,
     // and it never joins the keys held below, so its note off finds nothing to end (only the same key held as a note
     // before Run went on, which that off lets go of).
     // Every other note, and every note with Run off: both VCOs move by its distance from middle C (the panel's
@@ -548,7 +548,8 @@ public:
 
     // All Sound Off (CC 120, a wildcard choke): silence at once, EG: Hold's drone included — both EGs to
     // rest and the filter and decimator emptied, and the gate stays off until a note, Trigger or an EG-mode
-    // change sounds again. (All Notes Off above only ends held notes, as it should.)
+    // change sounds again. Sequencer clocks in EG: On are not gated on `silenced`: while playing, the next
+    // step sounds again. (All Notes Off above only ends held notes, as it should.)
     void panic()
     {
         held = 0;

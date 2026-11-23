@@ -64,7 +64,7 @@ The public controls, in host parameter order.
 | Run | PLAY | Stop / Run: with Run off the host plays but the sequencers hold and nothing fires. Run also decides what the pads do: on, pads 1–16 play the steps; off, they play notes (below) |
 | Reset | RESET | both sequencers to step 1 and the generators to their start: the next clock fires every routed generator and plays step 1 |
 | Next | NEXT | both sequencers on one step, without the EGs |
-| Trigger | TRIGGER | both EGs at once, without moving the sequencers (not during an attack; nothing in EG: Hold) |
+| Trigger | TRIGGER | both EGs at once, without moving the sequencers (not during an attack; in EG: Hold, only sounds the drone again after an All Sound Off) |
 | Fine Tune | OSC 1 + OSC 2 held, TEMPO turned | ±50 cents on both VCOs |
 
 ### Pads and notes
@@ -77,7 +77,7 @@ track at its defaults (octave 2, key C, Chromatic) pads A01–A16 send notes 36�
   the second row (40–43) Seq 2's steps 1–4, and the top two rows (44–51) the same again. A pad plays its step as the
   sequencer would on reaching it: the step's value goes to wherever that sequencer is routed (its VCO's pitch, its
   subs' divisors), quantized, at the current transposition, and both EGs start as Trigger starts them (in EG: Off
-  too; in EG: Hold the drone just moves). The sequencer itself does not move: its next step at a clock (or Reset,
+  too; in EG: Hold the drone just moves, and sounds again after an All Sound Off). The sequencer itself does not move: its next step at a clock (or Reset,
   or Next, or a Play or jump lining the steps up with the song again) takes over, and the pattern carries on where
   it was. A pad plays once (letting go of it does
   nothing) and never transposes. Two pads on one frame: one of each sequencer both apply; two of one sequencer, the
@@ -91,8 +91,9 @@ track at its defaults (octave 2, key C, Chromatic) pads A01–A16 send notes 36�
 
 A note off, a choke for one key, and Melodee's All Notes Off (CC 123) end only notes held as notes: a pad's step
 is never held, so they never touch it, and a pad's note off never ends another held note. All Sound Off (CC 120,
-or a choke for every key) is the exception: it silences the voice at once, an EG: Hold drone included, until a
-note, Trigger or an EG change sounds again.
+or a choke for every key) is the exception: it silences the sounding voice at once, an EG: Hold drone included.
+While the song plays in EG: On, the sequencer keeps running and its next step sounds again; otherwise the voice
+stays silent until a note, Trigger or an EG change sounds again.
 
 ## Presets
 
@@ -216,9 +217,10 @@ sequencer the later wins, of both both apply, one hit), on, on, off of one pad (
 off under a held note, a choke and a CC 120/123 storm on every channel, notes 35 and 52 still transposing and gating
 and the pads keeping that transposition, Run off (the pads notes again, held as a gate) and on again, and the same
 output with pads inside blocks of 1, 37, 128 and 4096 frames, playing and stopped; a preset loaded while playing heard
-exactly as its values sent as events; All Sound Off silencing a Hold drone (All Notes Off not touching it), a pad's
-step ending at a song jump, a mid-grid Play landing the same at every block size, a page press the host slept on,
-hostile tempos (0, 2000, infinite) and sample rates, a state from a newer version refused, nan/inf text refused;
+exactly as its values sent as events; All Sound Off silencing a Hold drone (All Notes Off not touching it), while
+playing in EG: On only until the next step, Trigger sounding the drone again, a pad's step ending at a song jump,
+a mid-grid Play landing the same at every block size, a page press the host slept on and one voided by a reset,
+hostile tempos (0, 2000, nan, infinite) and sample rates, a state from a newer version refused, nan/inf text refused;
 and finite, bounded output at 60 random and extreme settings, never stuck at the ceiling (what a NaN inside would
 give).
 
