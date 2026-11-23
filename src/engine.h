@@ -402,6 +402,8 @@ class Engine
 public:
     void prepare (double hostRate, uint32_t)
     {
+        if (! (hostRate > 0.0) || ! std::isfinite (hostRate))
+            hostRate = 48000.0;
         rate = hostRate;
         inner = (float) (2.0 * hostRate);
         invInner = 1.0f / inner;
@@ -432,7 +434,7 @@ public:
             step[s] = 0, fresh[s] = true, shown[s] = -1;
         held = 0;
         transpose = 0.0f;
-        gated = false;
+        gated = silenced = false;
         retarget();
         for (int i = 0; i < smoothed; ++i)
             smooth[i] = target[i];
@@ -451,7 +453,10 @@ public:
         if (id == ParamId::clockDiv)
             regridWanted = true;
         if (id == ParamId::egMode)
+        {
+            silenced = false;
             applyGate(); // Hold: both EGs to the top and there they stay; out of Hold, they decay
+        }
     }
 
     // Reset: both sequencers to step 1 and the rhythm generators to their start, from the next clock. Next: both
@@ -473,15 +478,22 @@ public:
                 step[s] = (step[s] + 1) & 3, shown[s] = -1;
             snapPitch();
         }
-        else if (egMode() != 2)
-            vcfEg.trigger(), vcaEg.trigger();
+        else // Trigger: sounds again after a panic, in Hold by gating the drone back on
+        {
+            silenced = false;
+            if (egMode() == 2)
+                applyGate();
+            else
+                vcfEg.trigger(), vcaEg.trigger();
+        }
     }
 
     // A MIDI note. While Run is on, the pads of a Melodee plug-in track (notes 36 to 51 at its defaults, rows of four
     // from the bottom) are the steps: 36-39 Seq 1's steps 1-4, 40-43 Seq 2's, 44-51 the same again. A step pad shows
     // its step on that sequencer's outputs as the sequencer stepping onto it would (the step's value, quantized, at
-    // the current transposition), without moving the sequencer, until that sequencer's next step at a clock, Reset or
-    // Next; and it starts both EGs as Trigger does (not in EG: Hold). One-shot: it holds no gate and never transposes,
+    // the current transposition), without moving the sequencer, until that sequencer's next step at a clock, Reset,
+    // Next, or a Play or jump lining the steps up with the song again; and it starts both EGs as Trigger does (not
+    // in EG: Hold). One-shot: it holds no gate and never transposes,
     // and it never joins the keys held below, so its note off finds nothing to end (only the same key held as a note
     // before Run went on, which that off lets go of).
     // Every other note, and every note with Run off: both VCOs move by its distance from middle C (the panel's
@@ -489,13 +501,17 @@ public:
     // note is down. The last note held wins.
     void noteOn (int key)
     {
+        silenced = false; // a fresh note sounds again after a panic
         if (knob[ParamId::run] >= 0.5f && key >= firstPad && key < firstPad + 16)
         {
             const int pad = key - firstPad;
             shown[(pad >> 2) & 1] = pad & 3;
+            shownAt[(pad >> 2) & 1] = (int64_t) now;
             snapPitch();
             if (egMode() != 2)
                 vcfEg.trigger(), vcaEg.trigger();
+            else
+                applyGate();
             return;
         }
         noteOff (key);
@@ -529,6 +545,22 @@ public:
         applyGate();
     }
 
+    // All Sound Off (CC 120, a wildcard choke): silence at once, EG: Hold's drone included — both EGs to
+    // rest and the filter and decimator emptied, and the gate stays off until a note, Trigger or an EG-mode
+    // change sounds again. (All Notes Off above only ends held notes, as it should.)
+    void panic()
+    {
+        held = 0;
+        silenced = true;
+        gated = false;
+        vcfEg.gate = vcaEg.gate = false;
+        vcfEg.value = vcaEg.value = 0.0f;
+        vcfEg.stage = vcaEg.stage = Envelope::rest;
+        filter = Ladder {};
+        decimator.clear();
+        mixHeld = 0.0f;
+    }
+
     // A single snapshot for the screen. Both sequencers may advance on the same clock.
     uint64_t screenPosition() const
     {
@@ -542,6 +574,8 @@ public:
     void transport (bool isPlaying, double beats, double bpm, uint32_t frames)
     {
         perFrame = bpm / 60.0 / rate;
+        if (! (perFrame > 0.0) || ! std::isfinite (perFrame)) // a hostile tempo must never hang render()
+            perFrame = 120.0 / 60.0 / rate;
         const double window = (double) std::max (frames, lastBlock); // how late a wrap inside a block can be seen
         lastBlock = frames;
         if (! isPlaying)
@@ -554,7 +588,7 @@ public:
         // the clocks already played are not played again, one passed is played at once.
         const double moved = std::fabs (beats - position);
         if (! playing)
-            relocate (beats, window, false);
+            relocate (beats, 128.0, false); // Play: a fixed tolerance (the host's own block), never this call's size
         else if (moved > 0.5 * perFrame && moved >= window * perFrame)
             relocate (beats, window, true);
         playing = true;
@@ -641,6 +675,11 @@ private:
 
     void relocate (double beats, double window, bool jumped)
     {
+        // A Play or a jump ends a step pad's step: the song's place decides now. A pad that arrived in this
+        // very block (its events come before the transport) is the exception: it holds until the next clock.
+        for (int s = 0; s < 2; ++s)
+            if (shownAt[s] < (int64_t) now)
+                shown[s] = -1;
         const double grid = clockBeats();
         const int64_t b = (int64_t) std::floor (beats / grid + 1.0e-9);
         const double late = (beats - (double) b * grid) / perFrame; // frames since the host's clock b
@@ -702,7 +741,7 @@ private:
 
     void applyGate()
     {
-        const bool g = egMode() == 2 || held > 0;
+        const bool g = ! silenced && (egMode() == 2 || held > 0);
         if (g && ! gated)
             vcfEg.trigger(), vcaEg.trigger();
         gated = g;
@@ -864,10 +903,12 @@ private:
     float dt[2] {}, dtFrom[2] {}, G = 0.0f, gainFrom = 0.0f; // the VCOs' increments and the filter's gain, and what they came from
     int wave[2] {};
     bool playing = false, regridWanted = false, resetWanted = false, dirty = true, moving = false, gated = false;
+    bool silenced = false; // panic() sounded off: the gate stays off until a note, Trigger or EG change
     bool clockedLoud = false; // the last clock played started the EGs
     bool fresh[2] { true, true };
     int step[2] {};
     int shown[2] { -1, -1 }; // the step a step pad put on each sequencer's outputs (-1: the sequencer's own)
+    int64_t shownAt[2] {};   // the frame that pad arrived (a pad in Play's own block survives its relocate)
     int keys[maxHeld] {};
     int held = 0;
     int64_t lastClock = -1, origin = 0, rhythmPosition = 0;

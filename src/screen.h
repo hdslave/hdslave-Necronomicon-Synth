@@ -86,7 +86,8 @@ class Screen
     {
         for (const char* s = label; *s; ++s, x += advance)
         {
-            const auto& glyph = hdui::font::glyphs[(unsigned char) *s - 32];
+            const unsigned c = (unsigned char) *s; // the font holds 32..127; anything else draws as a space
+            const auto& glyph = hdui::font::glyphs[c >= 32 && c < 128 ? c - 32 : 0];
             for (int j = 0; j < hdui::font::glyphHeight; ++j)
                 for (int k = 0; k < 7; ++k)
                     if (glyph[j] & (1 << k)) r.box (x + k * 2, y + j * 2, 2, 2, color);
@@ -116,7 +117,9 @@ class Screen
 
     void formatted (uint32_t id, char (&buf)[48]) const
     {
-        formatParam (paramTable[paramIndex (id)], sampled[id], buf, sizeof buf, stepOctaves (sampled[ParamId::seqOct]));
+        const int index = paramIndex (id);
+        if (index < 0) { buf[0] = 0; return; }
+        formatParam (paramTable[index], sampled[id], buf, sizeof buf, stepOctaves (sampled[ParamId::seqOct]));
     }
 
     static void shiftPalette (std::array<Ink, 256>& colors, int colorStep)
@@ -151,7 +154,7 @@ class Screen
             shiftPalette (shifted, colorStep + 11 * g);
             palette = shifted.data();
         }
-        const int d = int (sampled[rhythmId (g, 0)]), phase = int ((pos >> 4) % d);
+        const int d = std::clamp (int (sampled[rhythmId (g, 0)]), 1, 16), phase = int ((pos >> 4) % d);
         constexpr int size = 56;
         const auto* lens = art::lens + (d * (d - 1) / 2 + phase) * size * size;
         for (int y = 0; y < size; ++y)
@@ -230,7 +233,13 @@ class Screen
                 r.text (x + 48, 21, "-", 0xffa291ae);
                 continue;
             }
-            const auto& param = paramTable[paramIndex (ids[k])];
+            const int index = paramIndex (ids[k]);
+            if (index < 0)
+            {
+                r.text (x + 48, 21, "-", 0xffa291ae);
+                continue;
+            }
+            const auto& param = paramTable[index];
             char label[48], val[48]; formatted (ids[k], val);
             if (group == 0)
             {
@@ -274,7 +283,8 @@ public:
         {
             if (group == 0) { ids[k] = rhythmId (rows[0], k); continue; }
             const int i = rows[group] + k;
-            ids[k] = i < p.count && paramTable[paramIndex (p.ids[i])].kind != Kind::button ? p.ids[i] : hdui::noParam;
+            const int index = i < p.count ? paramIndex (p.ids[i]) : -1;
+            ids[k] = index >= 0 && paramTable[index].kind != Kind::button ? p.ids[i] : hdui::noParam;
         }
     }
 
@@ -296,6 +306,7 @@ public:
         }
         const uint32_t id = group ? p.ids[row] : rhythmId (row, 0);
         const int index = paramIndex (id);
+        if (index < 0) return false;
         const auto& param = paramTable[index];
         if (e.kind == MELODEE_SCREEN_PUSH)
         {

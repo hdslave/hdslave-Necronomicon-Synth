@@ -10,7 +10,7 @@
 #include <strings.h>
 
 #ifndef NECRONOMICON_VERSION
-#define NECRONOMICON_VERSION "0.2.0"
+#define NECRONOMICON_VERSION "0.2.1"
 #endif
 
 namespace necronomicon
@@ -261,7 +261,7 @@ inline bool parseParam (const Param& p, const char* text, float& v, float octave
             text = slash + 1;
     char* end = nullptr;
     double x = std::strtod (text, &end);
-    if (end == text)
+    if (end == text || ! std::isfinite (x)) // "nan" and "inf" are not values
         return false;
     while (*end == ' ')
         ++end;

@@ -2,7 +2,6 @@
 // This file is the CLAP side: the factory, ports, parameters, state, presets and the process call, which cuts the
 // block at each event so every change lands on its frame. The sound and the sequencers are in engine.h.
 #include "screen.h"
-#include <chrono>
 #include "engine.h"
 #include "params.h"
 #include "presets.h"
@@ -46,9 +45,10 @@ struct Plugin
     std::atomic<uint64_t> position { 0 }, outgoing { 0 };
     std::atomic<int> colorStep { 0 };
     bool valuesMoved = false; // owned by process/flush
-    // One producer (screen input), one consumer (process). Keep repeated presses in order,
-    // with their individual timestamps, even if the host sleeps between them.
-    struct Press { uint32_t id, generation; uint64_t when; };
+    // One producer (screen input), one consumer (process). Keep repeated presses in order, even if the host
+    // sleeps between them: a press never expires, it is only voided by a state or preset taking its place
+    // (the generation).
+    struct Press { uint32_t id, generation; };
     std::array<Press, 32> presses {};
     std::atomic<uint32_t> written { 0 }, taken { 0 }, generation { 0 };
     // The settings pages' eye animates while the song plays and for screenRestMs after the page is opened, touched or a
@@ -63,12 +63,6 @@ constexpr uint64_t screenRestMs = 4000;
 Plugin& of (const clap_plugin* p) { return *static_cast<Plugin*> (p->plugin_data); }
 
 static_assert (paramCount <= 64, "page edits use one bit per parameter");
-
-uint64_t steadyMs()
-{
-    return uint64_t (std::chrono::duration_cast<std::chrono::milliseconds> (
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-}
 
 void repaint (Plugin& p)
 {
@@ -107,11 +101,10 @@ void takePresses (Plugin& p)
     uint32_t at = p.taken.load (std::memory_order_relaxed);
     const uint32_t end = p.written.load (std::memory_order_acquire);
     if (at == end) return;
-    const uint64_t now = steadyMs();
     while (at != end)
     {
         const auto press = p.presses[at++ % p.presses.size()];
-        if (press.generation == p.generation.load (std::memory_order_acquire) && now - press.when <= 500)
+        if (press.generation == p.generation.load (std::memory_order_acquire))
             p.engine.press (press.id);
     }
     p.taken.store (end, std::memory_order_release);
@@ -228,7 +221,9 @@ void handle (Plugin& p, const clap_event_header* e, const clap_output_events* ou
         case CLAP_EVENT_NOTE_CHOKE:
         {
             const auto* n = reinterpret_cast<const clap_event_note*> (e);
-            if (e->type != CLAP_EVENT_NOTE_ON && n->key < 0) // key -1: every note (a wildcard off or choke)
+            if (e->type == CLAP_EVENT_NOTE_CHOKE && n->key < 0) // a wildcard choke: every sound off
+                p.engine.panic();
+            else if (e->type == CLAP_EVENT_NOTE_OFF && n->key < 0) // key -1: every note off
                 p.engine.allNotesOff();
             else if (n->key >= 0 && n->key < 128)
             {
@@ -247,7 +242,9 @@ void handle (Plugin& p, const clap_event_header* e, const clap_output_events* ou
                 p.engine.noteOn (key);
             else if (status == 0x80 || status == 0x90)
                 p.engine.noteOff (key);
-            else if (status == 0xb0 && (key == 120 || key == 123)) // all sound off, all notes off
+            else if (status == 0xb0 && key == 120) // all sound off
+                p.engine.panic();
+            else if (status == 0xb0 && key == 123) // all notes off
                 p.engine.allNotesOff();
             break;
         }
@@ -296,6 +293,8 @@ const clap_plugin_params paramsExtension { paramsCount, paramsInfo, paramsValue,
 // their defaults, so a state saved by another version still loads.
 constexpr char stateTag[4] = { 'N', 'E', 'C', 'R' };
 constexpr uint32_t stateVersion = 1;
+struct StatePair { uint32_t id; float value; };
+static_assert (sizeof (StatePair) == 8, "a saved (id, value) pair is 8 bytes");
 
 bool writeAll (const clap_ostream* s, const void* data, uint64_t size)
 {
@@ -347,7 +346,7 @@ bool stateSave (const clap_plugin* plugin, const clap_ostream* stream)
         return false;
     for (uint32_t i = 0; i < paramCount; ++i)
     {
-        const struct { uint32_t id; float value; } pair { paramTable[i].id, p.values[i].load (std::memory_order_relaxed) };
+        const StatePair pair { paramTable[i].id, p.values[i].load (std::memory_order_relaxed) };
         if (! writeAll (stream, &pair, sizeof (pair)))
             return false;
     }
@@ -360,14 +359,14 @@ bool stateLoad (const clap_plugin* plugin, const clap_istream* stream)
     char tag[4] = {};
     uint32_t header[2] = {};
     if (! readAll (stream, tag, 4) || std::memcmp (tag, stateTag, 4) != 0 || ! readAll (stream, header, sizeof (header))
-        || header[0] == 0 || header[1] > 4096)
+        || header[0] == 0 || header[0] > stateVersion || header[1] > 4096)
         return false;
     float loaded[paramCount];
     for (uint32_t i = 0; i < paramCount; ++i)
         loaded[i] = paramTable[i].def;
     for (uint32_t i = 0; i < header[1]; ++i)
     {
-        struct { uint32_t id; float value; } pair {};
+        StatePair pair {};
         if (! readAll (stream, &pair, sizeof (pair)))
             return false;
         const int index = paramIndex (pair.id);
@@ -466,6 +465,8 @@ void pluginDestroy (const clap_plugin* plugin)
 
 bool pluginActivate (const clap_plugin* plugin, double rate, uint32_t, uint32_t maxFrames)
 {
+    if (! (rate > 0.0) || ! std::isfinite (rate))
+        return false;
     auto& p = of (plugin);
     p.engine.prepare (rate, maxFrames);
     publishScreen (p);
@@ -497,6 +498,8 @@ struct FlushDenormals
 
 int wheelColorStep (const clap_event_transport& t, double beat)
 {
+    if (! std::isfinite (beat))
+        return 0;
     const bool metered = (t.flags & CLAP_TRANSPORT_HAS_TIME_SIGNATURE) && t.tsig_num && t.tsig_denom;
     const double barLength = metered ? 4.0 * t.tsig_num / t.tsig_denom : 4.0;
     double bars = beat / barLength;
@@ -535,7 +538,7 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
     const uint32_t lastFrame = frames > 0 ? frames - 1 : 0;
     for (; next < count && in->get (in, next)->time == 0; ++next)
         handle (p, in->get (in, next), process->out_events, lastFrame);
-    // The page's presses (if fresh) count as the host's buttons at the first frame do: before the transport.
+    // The page's presses count as the host's buttons at the first frame do: before the transport.
     takePresses (p);
 
     // The host's transport. Without a song position (Melodee always sends one), the sequencers count their own from
@@ -544,7 +547,7 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
     {
         const bool playing = (t->flags & CLAP_TRANSPORT_IS_PLAYING) != 0;
         const bool placed = (t->flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE) != 0;
-        const double bpm = (t->flags & CLAP_TRANSPORT_HAS_TEMPO) && t->tempo > 0.0 ? t->tempo : 120.0;
+        const double bpm = (t->flags & CLAP_TRANSPORT_HAS_TEMPO) && t->tempo > 0.0 ? std::clamp (t->tempo, 1.0, 1000.0) : 120.0;
         const double beats = placed ? (double) t->song_pos_beats / (double) CLAP_BEATTIME_FACTOR : p.engine.ownPosition();
         p.engine.transport (playing, beats, bpm, frames);
     }
@@ -614,7 +617,7 @@ bool screenInput (const clap_plugin* plugin, const melodee_screen_input_t* e)
         {
             const uint32_t at = p.written.load (std::memory_order_relaxed);
             if (at - p.taken.load (std::memory_order_acquire) >= p.presses.size()) return false;
-            p.presses[at % p.presses.size()] = { edit.id, p.generation.load (std::memory_order_relaxed), steadyMs() };
+            p.presses[at % p.presses.size()] = { edit.id, p.generation.load (std::memory_order_relaxed) };
             p.written.store (at + 1, std::memory_order_release);
         }
         else

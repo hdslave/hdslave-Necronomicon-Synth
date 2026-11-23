@@ -20,6 +20,7 @@
 #include <dlfcn.h>
 #include <cstdlib>
 #include <functional>
+#include <limits>
 #include <map>
 #include <random>
 #include <string>
@@ -1522,11 +1523,11 @@ void testScreen()
     const int asleep = processRequests;
     CHECK (in (MELODEE_SCREEN_PUSH) && processRequests > asleep);
     std::this_thread::sleep_for (std::chrono::milliseconds (550));
-    CHECK (in (MELODEE_SCREEN_PUSH)); // a fresh press cannot renew an older one
+    CHECK (in (MELODEE_SCREEN_PUSH)); // a press never expires: the slept-on one counts too
     block (0.0, false); paint();
-    CHECK (step (0,1) && step (1,1));
+    CHECK (step (0,2) && step (1,2));
     CHECK (in (MELODEE_SCREEN_PUSH) && in (MELODEE_SCREEN_PUSH));
-    block (0.0, false); paint(); CHECK (step (0,3) && step (1,3));
+    block (0.0, false); paint(); CHECK (step (0,0) && step (1,0));
 
     // Each non-button parameter remains reachable with a pot somewhere on the custom panels.
     std::vector<clap_id> reachable;
@@ -1660,6 +1661,167 @@ void demos (const std::string& folder)
 }
 } // namespace
 
+// Verified review fixes (0.2.1): All Sound Off silences an EG: Hold drone, the tempo is clamped to a finite
+// 1-1000 BPM (an infinite tempo must not hang the render loop), a mid-grid Play lands the same at every block
+// size, a step pad's step does not survive a song jump, a page press older than half a second still fires, a
+// state from a newer version is refused, and nan/inf text is refused.
+void testVerifiedFixes()
+{
+    std::vector<float> l, r, l2, r2;
+    const auto still = [] (uint64_t) { return stopped; };
+    // Panic: an EG: Hold drone sounding with no note held. CC 120 and a wildcard choke silence it at once;
+    // CC 123 (all notes off) does not touch it. A later note sounds again, and Hold holds it after its off.
+    for (int mode = 0; mode < 3; ++mode) // 0: CC 120, 1: wildcard choke, 2: CC 123
+    {
+        Instance a;
+        a.setup (dronePatch (a));
+        a.render (48000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 100)
+            {
+                if (mode == 0) e.midi (0, 0xb0, 120, 0);
+                else if (mode == 1) e.note (0, CLAP_EVENT_NOTE_CHOKE, -1);
+                else e.midi (0, 0xb0, 123, 0);
+            }
+            if (mode == 0 && at == 128 * 200) e.note (0, CLAP_EVENT_NOTE_ON, 60);
+            if (mode == 0 && at == 128 * 300) e.note (0, CLAP_EVENT_NOTE_OFF, 60);
+        });
+        CHECK (rms (l, 6000, 2400) > 0.05);
+        if (mode == 2)
+        {
+            CHECK (rms (l, 20000, 2400) > 0.05);
+            continue;
+        }
+        bool silent = true;
+        for (size_t i = 128 * 100; i < 128 * 200 && i < l.size(); ++i)
+            silent &= l[i] == 0.0f && r[i] == 0.0f;
+        CHECK (silent);
+        if (mode == 0)
+            CHECK (rms (l, 30000, 2400) > 0.05 && rms (l, 44000, 2400) > 0.05);
+    }
+    // A pad's step ends at a song jump: pad step 3 (G5 in the drone patch) while playing, then a jump; what
+    // sounds after the jump is the sequencer's own step 1 (C5), not the pad's step.
+    {
+        Instance a;
+        a.setup (dronePatch (a));
+        a.render (96000, 128, l, r,
+                  [] (uint64_t at) {
+                      return at < 24000 ? Transport { true, 120.0, (double) at * 120.0 / 60.0 / 48000.0 }
+                                        : Transport { true, 120.0, 4.3 + (double) (at - 24000) * 120.0 / 60.0 / 48000.0 };
+                  },
+                  [&] (uint64_t at, uint32_t, Events& e) { if (at == 128 * 50) e.note (0, CLAP_EVENT_NOTE_ON, 38); });
+        CHECK (near (hz (l, 0.20, 0.45), g5, 0.01));
+        CHECK (near (hz (l, 0.65, 0.95), c5, 0.01));
+    }
+    // Play landing past a grid line (50 and 200 frames past, eighth-note clocks at 120 BPM): the same output
+    // at every block size, matching the 128-frame behaviour.
+    for (double past : { 50.0, 200.0 })
+    {
+        const double start = 0.5 + past * 120.0 / 60.0 / 48000.0;
+        std::vector<float> want;
+        {
+            Instance a;
+            a.setup (clickPatch (a));
+            a.render (24000, 128, want, r, [&] (uint64_t at) { return playingFrom (start, 120.0, 48000.0, at); });
+        }
+        CHECK (rms (want, 0, 24000) > 0.001);
+        for (uint32_t block : { 1u, 37u, 4096u })
+        {
+            Instance a;
+            a.setup (clickPatch (a));
+            a.render (24000, block, l, r, [&] (uint64_t at) { return playingFrom (start, 120.0, 48000.0, at); });
+            CHECK (l == want);
+        }
+    }
+    // A state whose version is newer than this build's is refused, and nothing changes.
+    {
+        Instance a, b;
+        a.setup ({ { "Volume", 0.25 }, { "Cutoff", 0.3 } });
+        std::vector<uint8_t> saved;
+        clap_ostream os { &saved, [] (const clap_ostream* s, const void* d, uint64_t n) -> int64_t {
+            auto* v = static_cast<std::vector<uint8_t>*> (s->ctx);
+            v->insert (v->end(), (const uint8_t*) d, (const uint8_t*) d + n);
+            return (int64_t) n;
+        } };
+        CHECK (a.state->save (a.plugin, &os) && saved.size() > 8);
+        saved[4] = 2; // version 2, little-endian as saved
+        struct Reader { const std::vector<uint8_t>* v; size_t at; } reader { &saved, 0 };
+        clap_istream is { &reader, [] (const clap_istream* s, void* to, uint64_t n) -> int64_t {
+            auto* rd = static_cast<Reader*> (s->ctx);
+            const size_t k = std::min<size_t> ((size_t) n, rd->v->size() - rd->at);
+            std::memcpy (to, rd->v->data() + rd->at, k);
+            rd->at += k;
+            return (int64_t) k;
+        } };
+        const double before = b.value ("Volume");
+        CHECK (! b.state->load (b.plugin, &is));
+        CHECK (b.value ("Volume") == before);
+    }
+    // Non-finite text is refused, not clamped into a value.
+    {
+        Instance a;
+        double v = -1.0;
+        CHECK (! a.params->text_to_value (a.plugin, a.id ("Cutoff"), "nan", &v));
+        CHECK (! a.params->text_to_value (a.plugin, a.id ("Cutoff"), "inf Hz", &v));
+        CHECK (a.params->text_to_value (a.plugin, a.id ("Cutoff"), "1000 Hz", &v) && v > 0.0 && v < 1.0);
+    }
+    // A page press the host slept on for over half a second still fires exactly once, as the same button
+    // (Trigger, stopped) sent by the host at the first frame does.
+    {
+        auto run = [&] (bool fromPage) {
+            Instance a;
+            a.setup (clickPatch (a, { { "VCA Decay", 0.3 } }));
+            std::vector<float> out, right;
+            if (fromPage)
+            {
+                const auto* screen = static_cast<const clap_plugin_melodee_screen*> (a.plugin->get_extension (a.plugin, CLAP_EXT_MELODEE_SCREEN));
+                for (const melodee_screen_input_t e : { melodee_screen_input_t { MELODEE_SCREEN_NUDGE, 1, false },
+                                                         melodee_screen_input_t { MELODEE_SCREEN_WHEEL, 5, false },
+                                                         melodee_screen_input_t { MELODEE_SCREEN_PUSH, 0, false } })
+                    CHECK (screen->input (a.plugin, &e));
+                std::this_thread::sleep_for (std::chrono::milliseconds (600)); // the host asleep: no process calls
+            }
+            a.render (24000, 128, out, right, still,
+                      [&] (uint64_t at, uint32_t, Events& e) { if (! fromPage && at == 0) a.set (e, "Trigger", 1.0); });
+            return out;
+        };
+        const auto page = run (true), host = run (false);
+        CHECK (rms (host, 0, 2400) > 0.01);
+        CHECK (page == host);
+    }
+    // Activation refuses a useless sample rate.
+    {
+        const auto* d = factory->get_plugin_descriptor (factory, 0);
+        const clap_plugin* p = factory->create_plugin (factory, &host, d->id);
+        CHECK (p != nullptr && p->init (p));
+        if (p != nullptr)
+        {
+            CHECK (! p->activate (p, 0.0, 1, 128));
+            CHECK (! p->activate (p, std::numeric_limits<double>::infinity(), 1, 128));
+            CHECK (p->activate (p, 48000.0, 1, 128));
+            p->deactivate (p);
+            p->destroy (p);
+        }
+    }
+    // Tempo: out-of-range values behave as the nearest bound, non-finite ones never reach the clock. The
+    // beats advance at the clamped rate while the tempo field carries the hostile value.
+    {
+        auto at = [&] (double tempoField, double beatsRate) {
+            Instance a;
+            a.setup (clickPatch (a));
+            std::vector<float> out, right;
+            a.render (24000, 128, out, right, [&] (uint64_t f) {
+                return Transport { true, tempoField, (double) f * beatsRate / 60.0 / 48000.0 };
+            });
+            return out;
+        };
+        const auto fast = at (1000.0, 1000.0);
+        CHECK (rms (fast, 0, 24000) > 0.001);
+        CHECK (at (2000.0, 1000.0) == fast);
+        CHECK (at (std::numeric_limits<double>::quiet_NaN(), 120.0) == at (120.0, 120.0));
+        CHECK (at (std::numeric_limits<double>::infinity(), 1000.0) == fast); // must terminate
+    }
+}
+
 int main (int argc, char** argv)
 {
     if (argc < 3)
@@ -1696,6 +1858,7 @@ int main (int argc, char** argv)
     testEnvelopesAndNotes();
     testStepPads();
     testExtremes();
+    testVerifiedFixes();
     demos (argv[2]);
     entry->deinit();
     std::printf ("%d checks, %d failed\n", checks, failures);
