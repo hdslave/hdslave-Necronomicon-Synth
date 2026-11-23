@@ -1817,6 +1817,33 @@ void testVerifiedFixes()
         CHECK (rms (host, 0, 2400) > 0.01);
         CHECK (page == host);
     }
+    // A page press queued before a CLAP reset or a de-/reactivate does not fire after it (a state or preset
+    // load already voids queued presses the same way): the queue that fires above stays silent.
+    for (int mode = 0; mode < 2; ++mode) // 0: reset, 1: de-/reactivate
+    {
+        Instance a;
+        a.setup (clickPatch (a, { { "VCA Decay", 0.3 } }));
+        const auto* screen = static_cast<const clap_plugin_melodee_screen*> (a.plugin->get_extension (a.plugin, CLAP_EXT_MELODEE_SCREEN));
+        for (const melodee_screen_input_t e : { melodee_screen_input_t { MELODEE_SCREEN_NUDGE, 1, false },
+                                                 melodee_screen_input_t { MELODEE_SCREEN_WHEEL, 5, false },
+                                                 melodee_screen_input_t { MELODEE_SCREEN_PUSH, 0, false } })
+            CHECK (screen->input (a.plugin, &e));
+        if (mode == 0)
+            a.plugin->reset (a.plugin);
+        else
+        {
+            a.plugin->stop_processing (a.plugin);
+            a.plugin->deactivate (a.plugin);
+            CHECK (a.plugin->activate (a.plugin, a.rate, 1, 4096));
+            CHECK (a.plugin->start_processing (a.plugin));
+        }
+        std::vector<float> out, right;
+        a.render (24000, 128, out, right, still);
+        bool silent = true;
+        for (size_t i = 0; i < out.size(); ++i)
+            silent &= out[i] == 0.0f && right[i] == 0.0f;
+        CHECK (silent);
+    }
     // Activation refuses a useless sample rate.
     {
         const auto* d = factory->get_plugin_descriptor (factory, 0);

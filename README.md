@@ -236,5 +236,5 @@ Copy `build/Necronomicon.clap` to `Melodee/Plugins/hdslave/hdslave Necronomicon.
 card's folder), then pick it on an empty track: Stage, Plugin, hdslave, hdslave Necronomicon. It needs only libc and libm, glibc 2.35 or
 newer (the MPC has 2.39); the build is about 1.2 MB.
 
-Not yet run on the MPC itself: version 0.2.1 has been loaded and played only by hdslaveOS's own CLAP host code
+Not yet run on the MPC itself: version 0.2.2 has been loaded and played only by hdslaveOS's own CLAP host code
 (`clap_check`, in the Linux build image) and by the tests above.

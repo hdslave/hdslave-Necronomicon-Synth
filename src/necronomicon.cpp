@@ -46,8 +46,8 @@ struct Plugin
     std::atomic<int> colorStep { 0 };
     bool valuesMoved = false; // owned by process/flush
     // One producer (screen input), one consumer (process). Keep repeated presses in order, even if the host
-    // sleeps between them: a press never expires, it is only voided by a state or preset taking its place
-    // (the generation).
+    // sleeps between them: a press never expires, it is only voided by a state or preset taking its place,
+    // or by a reset or reactivation (the generation).
     struct Press { uint32_t id, generation; };
     std::array<Press, 32> presses {};
     std::atomic<uint32_t> written { 0 }, taken { 0 }, generation { 0 };
@@ -468,6 +468,7 @@ bool pluginActivate (const clap_plugin* plugin, double rate, uint32_t, uint32_t 
     if (! (rate > 0.0) || ! std::isfinite (rate))
         return false;
     auto& p = of (plugin);
+    p.generation.fetch_add (1, std::memory_order_release); // a press queued before deactivation stays there
     p.engine.prepare (rate, maxFrames);
     publishScreen (p);
     p.active = true;
@@ -479,7 +480,10 @@ bool pluginStart (const clap_plugin*) { return true; }
 void pluginStop (const clap_plugin*) {}
 void pluginReset (const clap_plugin* plugin)
 {
-    auto& p = of (plugin); p.engine.reset(); publishScreen (p);
+    auto& p = of (plugin);
+    p.generation.fetch_add (1, std::memory_order_release); // a reset voids presses queued before it, as a load does
+    p.engine.reset();
+    publishScreen (p);
 }
 
 // Denormals: flush them to zero for the block (the filter and envelopes decay into them), as the FPU had it after.
