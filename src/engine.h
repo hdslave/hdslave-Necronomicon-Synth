@@ -421,6 +421,7 @@ public:
         decimator.clear();
         mixHeld = 0.0f;
         dtFrom[0] = dtFrom[1] = gainFrom = std::nanf (""); // nothing worked out yet (and the rate may have changed)
+        egFrom[0] = egFrom[1] = egFrom[2] = egFrom[3] = std::nanf ("");
         tick = 0;
         playing = regridWanted = resetWanted = false;
         lastClock = -1;
@@ -797,10 +798,16 @@ private:
         target[res] = knob[resonance] * maxFeedback;
         target[vcfAmt] = knob[vcfEgAmt] * vcfEgOctaves;
         target[gain] = knob[volume] * knob[volume];
-        vcfEg.attack = attackOf (attackSeconds (knob[vcfAttack]));
-        vcfEg.decay = decayOf (decaySeconds (knob[vcfDecay]));
-        vcaEg.attack = attackOf (attackSeconds (knob[vcaAttack]));
-        vcaEg.decay = decayOf (decaySeconds (knob[vcaDecay]));
+        // The EG rates (a pow and an exp each) are worked out again only when their exact knob moves; the
+        // expressions are the same, so the sound is unchanged to the bit.
+        if (knob[vcfAttack] != egFrom[0]) egFrom[0] = knob[vcfAttack], egRate[0] = attackOf (attackSeconds (egFrom[0]));
+        if (knob[vcfDecay] != egFrom[1]) egFrom[1] = knob[vcfDecay], egRate[1] = decayOf (decaySeconds (egFrom[1]));
+        if (knob[vcaAttack] != egFrom[2]) egFrom[2] = knob[vcaAttack], egRate[2] = attackOf (attackSeconds (egFrom[2]));
+        if (knob[vcaDecay] != egFrom[3]) egFrom[3] = knob[vcaDecay], egRate[3] = decayOf (decaySeconds (egFrom[3]));
+        vcfEg.attack = egRate[0];
+        vcfEg.decay = egRate[1];
+        vcaEg.attack = egRate[2];
+        vcaEg.decay = egRate[3];
         dirty = false;
         moving = true;
     }
@@ -901,6 +908,7 @@ private:
     float target[smoothed] {}, smooth[smoothed] {};
     float mixHeld = 0.0f, transpose = 0.0f;
     float dt[2] {}, dtFrom[2] {}, G = 0.0f, gainFrom = 0.0f; // the VCOs' increments and the filter's gain, and what they came from
+    float egRate[4] {}, egFrom[4] {}; // the EGs' rates (VCF attack/decay, VCA attack/decay), and their exact knobs
     int wave[2] {};
     bool playing = false, regridWanted = false, resetWanted = false, dirty = true, moving = false, gated = false;
     bool silenced = false; // panic() sounded off: the gate stays off until a note, Trigger or EG change
