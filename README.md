@@ -4,7 +4,7 @@
 
 ![Necronomicon Liquid Light stained-glass rhythm wheels running in hdslaveOS](docs/necronomicon-screen.gif)
 
-> **Desktop CLAP version (macOS & Windows):** A separate desktop CLAP build with all MPC screens on one interactive panel lives in [**`mac-clap/`**](mac-clap/) (`cd mac-clap && ./install-macos.sh`). Releases in this repo stay MPC Sample-only for now while the desktop builds are being finalized; the combined 11-plug-in suite also lives at [**hdslave-Synths-and-drum-machines-Mac-Win**](https://github.com/hdslave/hdslave-Synths-and-drum-machines-Mac-Win).
+> **Desktop CLAP version (macOS & Windows):** A separate desktop CLAP build with all MPC screens on one interactive panel lives in [**`mac-clap/`**](mac-clap/) (`cd mac-clap && ./install-macos.sh`). Releases in this repo stay MPC Sample-only for now while the desktop builds are being finalized.
 
 Built for the Akai MPC Sample running [Melodee](https://github.com/keremimo/melodee-sample) / [hdslaveOS](https://github.com/hdslave/hdslaveOS) (64-bit ARM Linux, Cortex-A55). Hosts list it as **hdslave Necronomicon** (id `com.hdslave.necronomicon`). It follows the front panel and normalled signal flow of the Moog Subharmonicon (without the patch bay): two VCOs, each with two phase-locked subharmonic dividers (1/1 to 1/16), a 4-pole ladder filter, two AD envelopes, two 4-step sequencers, and four polyrhythmic rhythm generators with OR/XOR logic.
 
