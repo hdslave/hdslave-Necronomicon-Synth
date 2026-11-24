@@ -8,7 +8,7 @@
 
 Built for the Akai MPC Sample running [Melodee](https://github.com/keremimo/melodee-sample) / [hdslaveOS](https://github.com/hdslave/hdslaveOS) (64-bit ARM Linux, Cortex-A55). Hosts list it as **hdslave Necronomicon** (id `com.hdslave.necronomicon`). It follows the front panel and normalled signal flow of the Moog Subharmonicon (without the patch bay): two VCOs, each with two phase-locked subharmonic dividers (1/1 to 1/16), a 4-pole ladder filter, two AD envelopes, two 4-step sequencers, and four polyrhythmic rhythm generators with OR/XOR logic.
 
-The rhythm generators divide the host clock — playing on the song's grid, stopping on stop, and staying aligned through song jumps. Under **hdslaveOS**, Necronomicon draws its animated **Liquid Light** screen with four stained-glass rhythm wheels tracking each divisor's phase and sequencer routing in real time.
+The rhythm generators divide the host clock — playing on the song's grid, stopping on stop, and staying aligned through song jumps. On Melodee 0.7 and hdslaveOS based on it, Necronomicon draws its animated **Liquid Light** screen with four stained-glass rhythm wheels tracking each divisor's phase and sequencer routing in real time.
 
 ## Signal flow
 
@@ -29,7 +29,7 @@ subs at 1/3 and 1/5 are a C with the F and the A-flat of the subharmonic series 
 
 ## Liquid Light
 
-In hdslaveOS, the Edit and Stage pages show one stained-glass window for each rhythm generator. Its clock divisor sets the number of lobes, and the white glint follows the current lobe. Read the two four-step strips below the windows to see which sequencers actually advanced under OR or XOR. Each window names the sequencers it feeds. [Screen captured in Melodee](assets/previews/liquid-light.png)
+Edit on the plug-in track and PANEL on Stage show one stained-glass window for each rhythm generator. Its clock divisor sets the number of lobes, and the white glint follows the current lobe. Read the two four-step strips below the windows to see which sequencers actually advanced under OR or XOR. Each window names the sequencers it feeds. [Screen captured in Melodee](assets/previews/liquid-light.png)
 
 Turn the wheel to select a generator. K1 changes its divisor, K2 routes it to Seq 1 and K3 routes it to Seq 2. Push the wheel to edit the divisor with detents and push again to finish. Minus and Plus visit the clock, sequencer, oscillator, mixer, filter and amp controls. On those pages the wheel selects a row, Push edits it or presses its button, and K1–K3 follow the selected row and the next two. Shift shows the controls. A hollow marker beneath a knob value shows the physical pot position until pickup.
 
@@ -238,5 +238,4 @@ Copy `build/Necronomicon.clap` to `Melodee/Plugins/hdslave/hdslave Necronomicon.
 card's folder), then pick it on an empty track: Stage, Plugin, hdslave, hdslave Necronomicon. It needs only libc and libm, glibc 2.35 or
 newer (the MPC has 2.39); the build is about 1.2 MB.
 
-Not yet run on the MPC itself: version 0.2.2 has been loaded and played only by hdslaveOS's own CLAP host code
-(`clap_check`, in the Linux build image) and by the tests above.
+Version 0.2.3 passed the Linux host tests above. Melodee 0.7.1 and hdslaveOS both rendered its custom screen. Physical MPC testing is pending.
