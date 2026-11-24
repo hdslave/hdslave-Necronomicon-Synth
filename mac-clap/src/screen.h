@@ -47,7 +47,8 @@ class Screen
     bool edit = false, lastEdit = false, lastShift = false, fading = false;
     uint64_t lastPos = 0, flashAt = 0;
     int lastFlash = 0, lastColorStep = 0, lastEye = -1;
-    melodee_screen_knob_t lastPots[3] {};
+    int16_t lastPots[3] { -1, -1, -1 };
+    bool lastPotsLive[3] {};
     std::array<float, ParamId::count> sampled {};
     hdui::Picture picture;
 
@@ -210,7 +211,7 @@ class Screen
         }
     }
 
-    void footer (Raster& r, const melodee_screen_canvas_t& c) const
+    void footer (Raster& r, const melodee_screen_frame_t& c) const
     {
         using namespace hdui::ink;
         if (c.shift)
@@ -254,14 +255,14 @@ class Screen
             }
             r.text (x + 26, 4, label, 0xffdfcfe4, std::strlen (label) > 10 ? 6 : 7);
             knobValue (r, x + 51, val);
-            if (!c.knobs[k].engaged && c.knobs[k].position >= 0)
+            if (!c.pots_live[k] && c.pots[k] >= 0)
             {
                 // The target and the physical pot while Melodee waits for pickup.
                 const int target = int (std::lround ((sampled[ids[k]] - param.min) / (param.max - param.min) * 84));
                 r.box (x + 7, 36, 89, 4, 0xff21192e);
                 r.box (x + 9, 37, 85, 1, rule);
                 r.box (x + 9 + target, 36, 1, 3, active);
-                r.frame (x + 8 + c.knobs[k].position * 84 / 127, 36, 3, 3, paper);
+                r.frame (x + 8 + c.pots[k] * 84 / 127, 36, 3, 3, paper);
             }
         }
     }
@@ -283,10 +284,10 @@ public:
 
     bool input (const melodee_screen_input_t& e, const std::atomic<float>* values, ScreenEdit& out)
     {
-        if (e.kind > MELODEE_SCREEN_NUDGE) return false;
+        if (e.kind > MELODEE_SCREEN_STEP) return false;
         const auto& p = panels::groups[group];
         int& row = rows[group];
-        if (e.kind == MELODEE_SCREEN_NUDGE && !edit)
+        if (e.kind == MELODEE_SCREEN_STEP && !edit)
         {
             const int next = std::clamp (group + (e.value > 0 ? 1 : -1), 0, groupCount - 1);
             if (next == group) return false;
@@ -308,20 +309,20 @@ public:
         }
         const float old = values[index].load (std::memory_order_relaxed);
         const float unit = param.kind == Kind::continuous ? (param.max - param.min) /
-            (e.kind == MELODEE_SCREEN_NUDGE ? 16.0f : (e.shift ? 1024.0f : 128.0f)) : 1.0f;
+            (e.kind == MELODEE_SCREEN_STEP ? 16.0f : (e.shift ? 1024.0f : 128.0f)) : 1.0f;
         const float value = clampParam (param, old + e.value * unit);
         if (value != old) out = { id, value, false };
         return true;
     }
 
-    bool paint (const melodee_screen_canvas_t& c, const std::atomic<float>* values, uint64_t pos, int colorStep)
+    bool paint (const melodee_screen_frame_t& c, const std::atomic<float>* values, uint64_t pos, int colorStep)
     {
         using namespace hdui::ink;
-        const bool whole = c.whole || lastGroup < 0, page = whole || group != lastGroup;
+        const bool whole = c.redraw_all != 0 || lastGroup < 0, page = whole || group != lastGroup;
         const bool selection = page || rows[group] != lastRow || edit != lastEdit;
-        if (!page && !group && pos != lastPos) { flashAt = c.now_ms; fading = true; }
-        if (page || c.now_ms - flashAt >= 100) fading = false;
-        const int flash = fading ? 2 - int ((c.now_ms - flashAt) / 50) : 0;
+        if (!page && !group && pos != lastPos) { flashAt = c.time_ms; fading = true; }
+        if (page || c.time_ms - flashAt >= 100) fading = false;
+        const int flash = fading ? 2 - int ((c.time_ms - flashAt) / 50) : 0;
         bool params = false, pots = false;
         for (uint32_t i = 0; i < paramCount; ++i)
         {
@@ -331,8 +332,10 @@ public:
         }
         for (int k = 0; k < 3; ++k)
         {
-            pots |= c.knobs[k].engaged != lastPots[k].engaged || c.knobs[k].position != lastPots[k].position;
-            lastPots[k] = c.knobs[k];
+            const bool liveNow = c.pots_live[k] != 0;
+            pots |= liveNow != lastPotsLive[k] || c.pots[k] != lastPots[k];
+            lastPots[k] = c.pots[k];
+            lastPotsLive[k] = liveNow;
         }
         bool drew = false;
         if (whole)
@@ -353,7 +356,7 @@ public:
                         [&](Raster& r) { window (r, g, pos, flash, colorStep); });
         if (group)
         {
-            const auto frameIndex = (c.now_ms * 30 + 500) / 1000 % std::size (art::eyeTimeline);
+            const auto frameIndex = (c.time_ms * 30 + 500) / 1000 % std::size (art::eyeTimeline);
             const int eye = art::eyeTimeline[frameIndex];
             if (selection || params || eye != lastEye)
                 drew |= picture.region<320,110> (c.pixels, int (c.stride), whole, 0, 38,
@@ -378,7 +381,7 @@ public:
                     }
                 }
             });
-        lastGroup = group; lastRow = rows[group]; lastEdit = edit; lastShift = c.shift;
+        lastGroup = group; lastRow = rows[group]; lastEdit = edit; lastShift = c.shift != 0;
         lastFlash = flash; lastPos = pos; lastColorStep = colorStep;
         return drew;
     }

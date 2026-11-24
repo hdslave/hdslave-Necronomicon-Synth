@@ -33,18 +33,18 @@ struct TilesAccess
         return tile < kTileCount ? kTitles[tile] : "";
     }
 
-    static bool CLAP_ABI paint (const clap_plugin_t* plugin, uint32_t tile, const melodee_screen_canvas_t* canvas, clap_id knobs_out[3])
+    static bool CLAP_ABI paint (const clap_plugin_t* plugin, uint32_t tile, const melodee_screen_frame_t* frame, clap_id knobs_out[3])
     {
-        if (tile >= kTileCount || !canvas || !canvas->pixels) return false;
+        if (tile >= kTileCount || !frame || !frame->pixels) return false;
         auto& p = of (plugin);
         const int savedGroup = p.screen.group;
         p.screen.group = (int) tile;
         p.screen.lastGroup = -1;
 
-        melodee_screen_canvas_t c = *canvas;
-        c.whole = true;
+        melodee_screen_frame_t c = *frame;
+        c.redraw_all = 1;
         const uint64_t pos = p.position.load (std::memory_order_acquire);
-        const int colorStep = int ((c.now_ms * 15 + 500) / 1000 % colorCycleSteps);
+        const int colorStep = int ((c.time_ms * 15 + 500) / 1000 % colorCycleSteps);
         const bool drew = p.screen.paint (c, p.values, pos, colorStep);
         if (knobs_out)
             p.screen.knobs (knobs_out);

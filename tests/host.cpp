@@ -41,8 +41,8 @@ int screenRequests = 0, processRequests = 0, flushRequests = 0;
 int rescans = 0, textRescans = 0, presetsLoaded = 0, presetErrors = 0, callbacks = 0;
 const void* hostExtension (const clap_host*, const char* id)
 {
-    static const clap_host_melodee_screen screen { [] (const clap_host*) { ++screenRequests; } };
-    if (std::strcmp (id, CLAP_EXT_MELODEE_SCREEN_HOST) == 0) return &screen;
+    static const melodee_screen_host_t screen { [] (const void*, uint32_t) { ++screenRequests; } };
+    if (std::strcmp (id, MELODEE_SCREEN_CLAP_HOST) == 0) return &screen;
     static const clap_host_log log { [] (const clap_host*, clap_log_severity s, const char* m) { std::printf ("  [plug-in log %d] %s\n", (int) s, m); } };
     static const clap_host_params params { [] (const clap_host*, clap_param_rescan_flags f) {
                                                rescans += (f & CLAP_PARAM_RESCAN_VALUES) != 0;
@@ -1386,10 +1386,10 @@ void testPressWithPlay()
         a.render (128 * 8, 128, l, r, [] (uint64_t) { return Transport { false, 120.0, 0.0 }; });
         if (fromPage)
         {
-            const auto* screen = static_cast<const clap_plugin_melodee_screen*> (a.plugin->get_extension (a.plugin, CLAP_EXT_MELODEE_SCREEN));
-            for (const melodee_screen_input_t e : { melodee_screen_input_t { MELODEE_SCREEN_NUDGE, 1, false },
-                                                     melodee_screen_input_t { MELODEE_SCREEN_WHEEL, 4, false },
-                                                     melodee_screen_input_t { MELODEE_SCREEN_PUSH, 0, false } })
+            const auto* screen = static_cast<const melodee_screen_t*> (a.plugin->get_extension (a.plugin, MELODEE_SCREEN_CLAP));
+            for (const melodee_screen_input_t e : { melodee_screen_input_t { MELODEE_SCREEN_STEP, 1, 0 },
+                                                     melodee_screen_input_t { MELODEE_SCREEN_WHEEL, 4, 0 },
+                                                     melodee_screen_input_t { MELODEE_SCREEN_PUSH, 0, 0 } })
                 CHECK (screen->input (a.plugin, &e));
         }
         a.render (48000, 128, l, r, [] (uint64_t at) { return playingFrom (2.5, 120.0, 48000.0, at); },
@@ -1403,18 +1403,18 @@ void testPressWithPlay()
 void testScreen()
 {
     Instance a;
-    const auto* screen = static_cast<const clap_plugin_melodee_screen*> (a.plugin->get_extension (a.plugin, CLAP_EXT_MELODEE_SCREEN));
+    const auto* screen = static_cast<const melodee_screen_t*> (a.plugin->get_extension (a.plugin, MELODEE_SCREEN_CLAP));
     CHECK (screen != nullptr);
     if (!screen) return;
     constexpr unsigned stride = 327;
     constexpr uint32_t sentinel = 0x2468acdf, litKey = 0xffffc59a, paper = 0xfffff2e6;
     std::vector<uint32_t> pixels (stride * 218, sentinel);
-    melodee_screen_canvas_t c {};
-    c.pixels = pixels.data(); c.width = 320; c.height = 218; c.stride = stride;
-    for (auto& k : c.knobs) k = { -1, true };
-    auto paint = [&](bool whole = false) { c.whole = whole; return screen->paint (a.plugin, &c); };
-    auto in = [&](uint32_t kind, int v = 0) { melodee_screen_input_t e { kind, v, false }; return screen->input (a.plugin, &e); };
-    auto knobs = [&] { std::array<clap_id,3> ids {}; screen->knobs (a.plugin, ids.data()); return ids; };
+    melodee_screen_frame_t c {};
+    c.pixels = pixels.data(); c.width = 320; c.height = 218; c.stride = stride; c.area = MELODEE_SCREEN_PAGE;
+    for (int k = 0; k < 3; ++k) c.pots[k] = -1, c.pots_live[k] = 1;
+    auto paint = [&](bool whole = false) { c.redraw_all = whole ? 1u : 0u; return screen->draw (a.plugin, &c); };
+    auto in = [&](uint32_t kind, int v = 0) { melodee_screen_input_t e { kind, v, 0 }; return screen->input (a.plugin, &e); };
+    auto knobs = [&] { std::array<uint32_t,3> ids {}; screen->controls (a.plugin, ids.data()); return ids; };
     auto pixel = [&](int x, int y) { return pixels[y * stride + x]; };
     auto step = [&](int lane, int n) { return pixel (58 + lane * 159 + n * 25, 160) == litKey; };
     std::vector<float> l, r;
@@ -1432,7 +1432,7 @@ void testScreen()
     // The static serif and idle rhythm page need no periodic repaint.
     const auto still = pixels;
     const int idleRequests = screenRequests;
-    c.now_ms = 1920;
+    c.time_ms = 1920;
     CHECK (!paint() && screenRequests == idleRequests && pixels == still);
     CHECK (paint (true) && pixels == still);
     auto changed = [&](const std::vector<uint32_t>& prior, int x, int y, int w, int h) {
@@ -1466,7 +1466,7 @@ void testScreen()
     routeThird (0, 1); CHECK (!changed (routed, 183, 70, 32, 32));
     routeThird (0, 0); CHECK (pixels == animated);
     CHECK (!in (99));
-    CHECK (!in (MELODEE_SCREEN_NUDGE, -1));
+    CHECK (!in (MELODEE_SCREEN_STEP, -1));
     CHECK ((knobs() == std::array<clap_id,3> { a.id ("Rhythm 1"), a.id ("Rhythm 1 > Seq 1"), a.id ("Rhythm 1 > Seq 2") }));
     CHECK (in (MELODEE_SCREEN_WHEEL, 2));
     CHECK ((knobs() == std::array<clap_id,3> { a.id ("Rhythm 3"), a.id ("Rhythm 3 > Seq 1"), a.id ("Rhythm 3 > Seq 2") }));
@@ -1479,8 +1479,8 @@ void testScreen()
     CHECK (std::find (told.values.begin(), told.values.end(), std::make_pair (a.id ("Rhythm 3"), 7.0)) != told.values.end());
     CHECK (in (MELODEE_SCREEN_PUSH));
     paint();
-    c.knobs[0] = { 127, false }; CHECK (paint() && !paint()); c.knobs[0] = { -1, true };
-    c.shift = true; CHECK (paint()); c.shift = false; CHECK (paint());
+    c.pots[0] = 127, c.pots_live[0] = 0; CHECK (paint() && !paint()); c.pots[0] = -1, c.pots_live[0] = 1;
+    c.shift = 1; CHECK (paint()); c.shift = 0; CHECK (paint());
 
     const int before = screenRequests;
     CHECK (a.loadPreset ("polyrhythm-bass") && screenRequests > before);
@@ -1489,32 +1489,32 @@ void testScreen()
     const int whilePlaying = screenRequests;
     CHECK (paint() && step (0,3) && step (1,2) && screenRequests > whilePlaying);
     CHECK (pixel (199,60) == paper && pixel (66,99) == paper);
-    c.now_ms += 60; CHECK (paint());
-    c.now_ms += 200; paint();
+    c.time_ms += 60; CHECK (paint());
+    c.time_ms += 200; paint();
     CHECK (!paint()); // no pixels changed twice at the same timestamp
     // At clock twelve, generators 1 and 2 pulse, and both stars return to the top.
     block (3.0, true); CHECK (paint());
     CHECK (pixel (43,60) == paper && pixel (121,60) == paper);
 
     // Moving from the rhythm page to CLOCK exposes the original transport buttons.
-    CHECK (in (MELODEE_SCREEN_NUDGE, 1) && knobs()[0] == a.id ("Clock Div"));
+    CHECK (in (MELODEE_SCREEN_STEP, 1) && knobs()[0] == a.id ("Clock Div"));
     CHECK (in (MELODEE_SCREEN_WHEEL, 4) && knobs()[0] == CLAP_INVALID_ID); // Next
     a.plugin->reset (a.plugin); block (0.0, false); paint();
     CHECK (step (0,0) && step (1,0));
-    c.now_ms = 0; paint();
+    c.time_ms = 0; paint();
     const auto clockPage = pixels;
     constexpr int eyeX = 166, eyeY = 82, eyeW = 72, eyeH = 28;
-    c.now_ms = 2000; CHECK (paint() && changed (clockPage, 192, 88, 26, 19)); // held glance
-    c.now_ms = 5400; paint();
+    c.time_ms = 2000; CHECK (paint() && changed (clockPage, 192, 88, 26, 19)); // held glance
+    c.time_ms = 5400; paint();
     const auto openEye = pixels;
-    c.now_ms = 5760; CHECK (paint() && changed (openEye, 192, 88, 26, 19)); // lid shuts
-    c.now_ms = 6200; CHECK (paint() && !changed (openEye, eyeX, eyeY, eyeW, eyeH)); // reopens at the same gaze
+    c.time_ms = 5760; CHECK (paint() && changed (openEye, 192, 88, 26, 19)); // lid shuts
+    c.time_ms = 6200; CHECK (paint() && !changed (openEye, eyeX, eyeY, eyeW, eyeH)); // reopens at the same gaze
     CHECK (!changed (clockPage, 0, 36, stride, eyeY - 36) && !changed (clockPage, 0, eyeY + eyeH, stride, 218 - eyeY - eyeH));
     CHECK (!changed (clockPage, 0, eyeY, eyeX, eyeH) && !changed (clockPage, eyeX + eyeW, eyeY, stride - eyeX - eyeW, eyeH));
     CHECK (!paint());
     // Stopped and left alone 4 s on a settings page, the eye rests: no next paint asked for (battery). Opened again, it
     // moves.
-    c.now_ms = 20000;
+    c.time_ms = 20000;
     const int resting = screenRequests;
     paint();
     CHECK (screenRequests == resting);
@@ -1531,7 +1531,7 @@ void testScreen()
 
     // Each non-button parameter remains reachable with a pot somewhere on the custom panels.
     std::vector<clap_id> reachable;
-    in (MELODEE_SCREEN_NUDGE,-1);
+    in (MELODEE_SCREEN_STEP,-1);
     for (int group = 0; group < 9; ++group)
     {
         in (MELODEE_SCREEN_WHEEL,-100);
@@ -1540,12 +1540,12 @@ void testScreen()
             const auto ids = knobs(); reachable.insert (reachable.end(), ids.begin(), ids.end());
             in (MELODEE_SCREEN_WHEEL,1);
         }
-        in (MELODEE_SCREEN_NUDGE,1);
+        in (MELODEE_SCREEN_STEP,1);
     }
     for (const auto& [name,id] : a.ids)
         if (name != "Reset" && name != "Next" && name != "Trigger")
             CHECK (std::find (reachable.begin(), reachable.end(), id) != reachable.end());
-    CHECK (!in (MELODEE_SCREEN_NUDGE,1));
+    CHECK (!in (MELODEE_SCREEN_STEP,1));
     c.width = 319; CHECK (!paint (true));
 }
 
@@ -1553,16 +1553,16 @@ void testScreenColorClock()
 {
     Instance a;
     a.setup ({{ "Run", 0 }}); // Hold the playheads so the only moving pixels are the unrouted palettes.
-    const auto* screen = static_cast<const clap_plugin_melodee_screen*> (a.plugin->get_extension (a.plugin, CLAP_EXT_MELODEE_SCREEN));
+    const auto* screen = static_cast<const melodee_screen_t*> (a.plugin->get_extension (a.plugin, MELODEE_SCREEN_CLAP));
     if (!screen) { CHECK (screen != nullptr); return; }
     std::vector<uint32_t> pixels (320 * 218);
-    melodee_screen_canvas_t c {};
-    c.pixels = pixels.data(); c.width = c.stride = 320; c.height = 218;
-    for (auto& k : c.knobs) k = { -1, true };
+    melodee_screen_frame_t c {};
+    c.pixels = pixels.data(); c.width = c.stride = 320; c.height = 218; c.area = MELODEE_SCREEN_PAGE;
+    for (int k = 0; k < 3; ++k) c.pots[k] = -1, c.pots_live[k] = 1;
     std::vector<float> l, r;
     auto draw = [&](Transport t, uint32_t frames = 1) {
         a.render (frames, 1024, l, r, [t](uint64_t) { return t; });
-        screen->paint (a.plugin, &c);
+        screen->draw (a.plugin, &c);
     };
     draw ({ true, 96, 0 });
     const auto start = pixels;
@@ -1802,10 +1802,10 @@ void testVerifiedFixes()
             std::vector<float> out, right;
             if (fromPage)
             {
-                const auto* screen = static_cast<const clap_plugin_melodee_screen*> (a.plugin->get_extension (a.plugin, CLAP_EXT_MELODEE_SCREEN));
-                for (const melodee_screen_input_t e : { melodee_screen_input_t { MELODEE_SCREEN_NUDGE, 1, false },
-                                                         melodee_screen_input_t { MELODEE_SCREEN_WHEEL, 5, false },
-                                                         melodee_screen_input_t { MELODEE_SCREEN_PUSH, 0, false } })
+                const auto* screen = static_cast<const melodee_screen_t*> (a.plugin->get_extension (a.plugin, MELODEE_SCREEN_CLAP));
+                for (const melodee_screen_input_t e : { melodee_screen_input_t { MELODEE_SCREEN_STEP, 1, 0 },
+                                                         melodee_screen_input_t { MELODEE_SCREEN_WHEEL, 5, 0 },
+                                                         melodee_screen_input_t { MELODEE_SCREEN_PUSH, 0, 0 } })
                     CHECK (screen->input (a.plugin, &e));
                 std::this_thread::sleep_for (std::chrono::milliseconds (600)); // the host asleep: no process calls
             }
@@ -1823,10 +1823,10 @@ void testVerifiedFixes()
     {
         Instance a;
         a.setup (clickPatch (a, { { "VCA Decay", 0.3 } }));
-        const auto* screen = static_cast<const clap_plugin_melodee_screen*> (a.plugin->get_extension (a.plugin, CLAP_EXT_MELODEE_SCREEN));
-        for (const melodee_screen_input_t e : { melodee_screen_input_t { MELODEE_SCREEN_NUDGE, 1, false },
-                                                 melodee_screen_input_t { MELODEE_SCREEN_WHEEL, 5, false },
-                                                 melodee_screen_input_t { MELODEE_SCREEN_PUSH, 0, false } })
+        const auto* screen = static_cast<const melodee_screen_t*> (a.plugin->get_extension (a.plugin, MELODEE_SCREEN_CLAP));
+        for (const melodee_screen_input_t e : { melodee_screen_input_t { MELODEE_SCREEN_STEP, 1, 0 },
+                                                 melodee_screen_input_t { MELODEE_SCREEN_WHEEL, 5, 0 },
+                                                 melodee_screen_input_t { MELODEE_SCREEN_PUSH, 0, 0 } })
             CHECK (screen->input (a.plugin, &e));
         if (mode == 0)
             a.plugin->reset (a.plugin);

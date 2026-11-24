@@ -40,7 +40,7 @@ struct Plugin
     float applied[paramCount] {};
     Engine engine;
     bool active = false;
-    const clap_host_melodee_screen* hostScreen = nullptr;
+    const melodee_screen_host_t* hostScreen = nullptr;
     const clap_host_params* hostParams = nullptr;
     Screen screen;
     std::atomic<uint64_t> position { 0 }, outgoing { 0 };
@@ -70,9 +70,9 @@ uint64_t steadyMs()
         std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
-void repaint (Plugin& p)
+void repaint (Plugin& p, uint32_t flags = 0)
 {
-    if (p.hostScreen && p.hostScreen->request_paint) p.hostScreen->request_paint (p.host);
+    if (p.hostScreen && p.hostScreen->redraw) p.hostScreen->redraw (p.host, flags);
 }
 
 void publishScreen (Plugin& p, bool colorsMoved = false)
@@ -451,7 +451,7 @@ bool pluginInit (const clap_plugin* plugin)
         p.applied[i] = paramTable[i].def;
         p.engine.set (paramTable[i].id, paramTable[i].def);
     }
-    p.hostScreen = static_cast<const clap_host_melodee_screen*> (p.host->get_extension (p.host, CLAP_EXT_MELODEE_SCREEN_HOST));
+    p.hostScreen = static_cast<const melodee_screen_host_t*> (p.host->get_extension (p.host, MELODEE_SCREEN_CLAP_HOST));
     p.hostParams = static_cast<const clap_host_params*> (p.host->get_extension (p.host, CLAP_EXT_PARAMS));
     return true;
 }
@@ -583,27 +583,27 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
     return CLAP_PROCESS_CONTINUE;
 }
 
-bool screenPaint (const clap_plugin* plugin, const melodee_screen_canvas_t* c)
+bool screenDraw (const void* plugin, const melodee_screen_frame_t* c)
 {
-    if (!c || !c->pixels || c->width != hdui::width || c->height != hdui::height || c->stride < c->width || c->stride > INT32_MAX)
+    if (!plugin || !c || !c->pixels || c->area != MELODEE_SCREEN_PAGE || c->width != hdui::width || c->height != hdui::height || c->stride < c->width || c->stride > INT32_MAX)
         return false;
-    auto& p = of (plugin);
+    auto& p = of (static_cast<const clap_plugin*> (plugin));
     const bool drew = p.screen.paint (*c, p.values, p.position.load (std::memory_order_acquire),
                                       p.colorStep.load (std::memory_order_relaxed));
-    bool busy = p.screenTouched || c->whole || c->playing;
+    bool busy = p.screenTouched || c->redraw_all != 0 || c->playing != 0;
     for (int k = 0; k < 3; ++k)
-        if (c->knobs[k].position != p.shownPots[k]) p.shownPots[k] = c->knobs[k].position, busy = true;
+        if (c->pots[k] != p.shownPots[k]) p.shownPots[k] = c->pots[k], busy = true;
     p.screenTouched = false;
-    if (busy) p.screenBusyMs = c->now_ms;
-    const bool recent = c->now_ms < p.screenBusyMs || c->now_ms - p.screenBusyMs < screenRestMs;
+    if (busy) p.screenBusyMs = c->time_ms;
+    const bool recent = c->time_ms < p.screenBusyMs || c->time_ms - p.screenBusyMs < screenRestMs;
     if (c->playing || p.screen.flashing() || (p.screen.needsAnimation() && recent)) repaint (p);
     return drew;
 }
 
-bool screenInput (const clap_plugin* plugin, const melodee_screen_input_t* e)
+bool screenInput (const void* plugin, const melodee_screen_input_t* e)
 {
-    if (!e) return false;
-    auto& p = of (plugin);
+    if (!plugin || !e) return false;
+    auto& p = of (static_cast<const clap_plugin*> (plugin));
     p.screenTouched = true; // the page animates again from its next paint
     ScreenEdit edit;
     if (!p.screen.input (*e, p.values, edit)) return false;
@@ -628,12 +628,16 @@ bool screenInput (const clap_plugin* plugin, const melodee_screen_input_t* e)
         }
         if (p.host->request_process) p.host->request_process (p.host);
     }
-    repaint (p);
+    repaint (p, edit.id != hdui::noParam ? MELODEE_SCREEN_RUN : 0);
     return true;
 }
 
-void screenKnobs (const clap_plugin* plugin, clap_id ids[3]) { of (plugin).screen.knobs (ids); }
-const clap_plugin_melodee_screen screenExtension { screenPaint, screenInput, screenKnobs };
+void screenControls (const void* plugin, uint32_t ids[3])
+{
+    if (!plugin || !ids) return;
+    of (static_cast<const clap_plugin*> (plugin)).screen.knobs (ids);
+}
+const melodee_screen_t screenExtension { screenDraw, screenInput, screenControls };
 
 } // namespace
 } // namespace necronomicon
@@ -647,7 +651,7 @@ namespace
 
 const void* pluginExtension (const clap_plugin*, const char* id)
 {
-    if (std::strcmp (id, CLAP_EXT_MELODEE_SCREEN) == 0) return &screenExtension;
+    if (std::strcmp (id, MELODEE_SCREEN_CLAP) == 0) return &screenExtension;
     if (std::strcmp (id, CLAP_EXT_HDSLAVE_TILES) == 0) return &tilesExtension;
     if (std::strcmp (id, CLAP_EXT_PARAMS) == 0) return &paramsExtension;
     if (std::strcmp (id, CLAP_EXT_STATE) == 0) return &stateExtension;
