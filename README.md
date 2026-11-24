@@ -2,7 +2,16 @@
 
 **A polyrhythmic subharmonic synthesizer (Subharmonicon panel & flow) as a CLAP plug-in for the Akai MPC Sample.**
 
-![Necronomicon Liquid Light stained-glass rhythm wheels running in hdslaveOS](docs/necronomicon-screen.gif)
+<table>
+  <tr>
+    <th width="34%">MPC Sample</th>
+    <th width="66%">macOS and Windows · CLAP</th>
+  </tr>
+  <tr>
+    <td align="center"><a href="docs/necronomicon-screen.gif"><img src="docs/necronomicon-screen.gif" alt="Necronomicon Liquid Light stained-glass rhythm wheels running in hdslaveOS"></a></td>
+    <td align="center"><a href="mac-clap/assets/desktop-preview.gif"><img src="mac-clap/assets/desktop-preview.gif" alt="Necronomicon oscillators, dividers and rhythm wheels during playback"></a></td>
+  </tr>
+</table>
 
 > **Desktop CLAP version (macOS & Windows):** A separate desktop CLAP build with all MPC screens on one interactive panel lives in [**`mac-clap/`**](mac-clap/) (`cd mac-clap && ./install-macos.sh`). Releases in this repo stay MPC Sample-only for now while the desktop builds are being finalized.
 
