@@ -229,6 +229,8 @@ void handle (Plugin& p, const clap_event_header* e, const clap_output_events* ou
             {
                 if (e->type == CLAP_EVENT_NOTE_ON)
                     p.engine.noteOn (n->key);
+                else if (e->type == CLAP_EVENT_NOTE_CHOKE)
+                    p.engine.choke (n->key);
                 else
                     p.engine.noteOff (n->key);
             }

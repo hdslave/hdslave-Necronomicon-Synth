@@ -546,6 +546,17 @@ public:
         applyGate();
     }
 
+    // A choke of one key (a host's choke group, or hdslaveOS's silence key by key): the key ends as a note off does,
+    // and once no key is held the voice stops at once, as All Sound Off stops it (the sound was that key's, or a step's,
+    // a pad's or EG: Hold's own). A key under another one still held only leaves the held list. (hdslaveOS sends CC 120
+    // itself straight after its chokes, so there the end is the same as it was.)
+    void choke (int key)
+    {
+        noteOff (key);
+        if (held == 0)
+            panic();
+    }
+
     // All Sound Off (CC 120, a wildcard choke): silence at once, EG: Hold's drone included — both EGs to
     // rest and the filter and decimator emptied, and the gate stays off until a note, Trigger or an EG-mode
     // change sounds again. Sequencer clocks in EG: On are not gated on `silenced`: while playing, the next

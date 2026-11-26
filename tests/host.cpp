@@ -1879,6 +1879,36 @@ void testVerifiedFixes()
     }
 }
 
+// A keyed choke stops the voice once no key is held, without the CC 120 hdslaveOS sends after it: a held note, an
+// EG: Hold drone; a key under another one held only leaves the held list.
+void testKeyChoke()
+{
+    std::vector<float> l, r;
+    const auto still = [] (uint64_t) { return stopped; };
+    auto choked = [&] (const Values& patch, std::vector<int16_t> on, int16_t key) {
+        Instance a;
+        a.setup (patch);
+        a.render (24000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+            if (at == 128 * 10)
+                for (int16_t k : on)
+                    e.note (0, CLAP_EVENT_NOTE_ON, k);
+            if (at == 128 * 100) e.note (0, CLAP_EVENT_NOTE_CHOKE, key);
+        });
+        bool silent = true;
+        for (size_t i = 128 * 101; i < l.size(); ++i)
+            silent &= l[i] == 0.0f && r[i] == 0.0f;
+        return silent;
+    };
+    Instance p;
+    const Values held = clickPatch (p, { { "VCA Decay", 1.0 } });
+    CHECK (choked (held, { 60 }, 60));
+    CHECK (rms (l, 128 * 50, 2400) > 0.1);
+    CHECK (choked (dronePatch (p), {}, 60)); // EG: Hold, no key held: the drone stops
+    CHECK (! choked (held, { 60, 64 }, 60)); // 64 still held: it sounds on
+    CHECK (rms (l, 128 * 150, 2400) > 0.1);
+    CHECK (choked (held, { 60, 64 }, 64) == false && rms (l, 128 * 150, 2400) > 0.1); // 60 under it still held
+}
+
 int main (int argc, char** argv)
 {
     if (argc < 3)
@@ -1916,6 +1946,7 @@ int main (int argc, char** argv)
     testStepPads();
     testExtremes();
     testVerifiedFixes();
+    testKeyChoke();
     demos (argv[2]);
     entry->deinit();
     std::printf ("%d checks, %d failed\n", checks, failures);

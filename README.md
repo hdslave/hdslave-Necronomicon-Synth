@@ -98,11 +98,12 @@ track at its defaults (octave 2, key C, Chromatic) pads A01â€“A16 send notes 36â
 - **Run off:** every note, the pads included, works that way: with EG: Off and the transport stopped, the pads play
   the synth like a monophonic keyboard.
 
-A note off, a choke for one key, and Melodee's All Notes Off (CC 123) end only notes held as notes: a pad's step
-is never held, so they never touch it, and a pad's note off never ends another held note. All Sound Off (CC 120,
-or a choke for every key) is the exception: it silences the sounding voice at once, an EG: Hold drone included.
-While the song plays in EG: On, the sequencer keeps running and its next step sounds again; otherwise the voice
-stays silent until a note, Trigger or an EG change sounds again.
+A note off and Melodee's All Notes Off (CC 123) end only notes held as notes: a pad's step is never held, so they
+never touch it, and a pad's note off never ends another held note. All Sound Off (CC 120, or a choke for every key)
+is the exception: it silences the sounding voice at once, an EG: Hold drone included. A choke for one key ends that
+key as a note off does, and once no key is held it silences the voice as All Sound Off does (a key under another one
+still held only leaves the held list). While the song plays in EG: On, the sequencer keeps running and its next step
+sounds again; otherwise the voice stays silent until a note, Trigger or an EG change sounds again.
 
 ## Presets
 
@@ -226,7 +227,8 @@ sequencer the later wins, of both both apply, one hit), on, on, off of one pad (
 off under a held note, a choke and a CC 120/123 storm on every channel, notes 35 and 52 still transposing and gating
 and the pads keeping that transposition, Run off (the pads notes again, held as a gate) and on again, and the same
 output with pads inside blocks of 1, 37, 128 and 4096 frames, playing and stopped; a preset loaded while playing heard
-exactly as its values sent as events; All Sound Off silencing a Hold drone (All Notes Off not touching it), while
+exactly as its values sent as events; a choke for one key silencing the voice once no key is held, and leaving a key
+still held sounding; All Sound Off silencing a Hold drone (All Notes Off not touching it), while
 playing in EG: On only until the next step, Trigger sounding the drone again, a pad's step ending at a song jump,
 a mid-grid Play landing the same at every block size, a page press the host slept on and one voided by a reset,
 hostile tempos (0, 2000, nan, infinite) and sample rates, a state from a newer version refused, nan/inf text refused;
@@ -247,4 +249,4 @@ Copy `build/Necronomicon.clap` to `Melodee/Plugins/hdslave/hdslave Necronomicon.
 card's folder), then pick it on an empty track: Stage, Plugin, hdslave, hdslave Necronomicon. It needs only libc and libm, glibc 2.35 or
 newer (the MPC has 2.39); the build is about 1.2 MB.
 
-Version 0.2.3 passed the Linux host tests above. Melodee 0.7.1 and hdslaveOS both rendered its custom screen. Physical MPC testing is pending.
+Version 0.2.4 (a choke for one key stops the voice once no key is held; all 49 fingerprints as they were) passed the Linux host tests above. Melodee 0.7.1 and hdslaveOS both rendered its custom screen at 0.2.3; the page is unchanged since. Physical MPC testing is pending.
