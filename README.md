@@ -139,13 +139,13 @@ same samples as the demo's list.
   not started twice; a downbeat the loop's end left silent plays then, at most a block late (2.7 ms at 128 frames).
 - A tempo change inside a block moves the host's place a few frames from where the clock counted: followed as it is,
   no clock played twice, a clock passed played at once.
-- So does a place a little off its line, either way, by less than a 64th note: hdslaveOS works the place out from its
+- So does a place a little off its line, either way, by up to a 64th note: hdslaveOS works the place out from its
   ticks, so a swung tick, a tick on a block's edge or MTC's trim puts it up to 0.0021 of a quarter off from block to
   block, and a plug-in two tracks play is run twice a block (its next block's first call told a block back). A step
   back holds the clocks already played until the song is past them again. Before 0.2.5 a step back of more than the
   call's own frames counted as a jump: with the calls in parts, at slow tempos or run twice a block, a clock could play
   twice or be lost (at 40 BPM with the place up to 0.002 of a quarter off, 57 of 192 clocks of 1/32 played twice). A
-  move of a 64th note or more is a jump, as before.
+  move of more than a 64th note is a jump, as before (exactly a 64th, as hdslaveOS has it, is not).
 - Clock Div changed while playing: the clocks count on the new grid from there; one due on that frame plays.
 - Run off: the host plays but the sequencers hold their steps and nothing fires; Next, Reset and Trigger work as on
   the panel, and the pads play notes (Pads and notes, above). Reset while playing restarts the generators from the
