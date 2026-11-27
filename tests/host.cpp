@@ -830,6 +830,253 @@ void testLoopsAndClockChanges()
     }
 }
 
+// --- The song's place a little off its line ------------------------------------------------------------------------
+// hdslaveOS tells the place only at its own 128-frame blocks, worked out from its ticks, and it is not quite a straight
+// line from block to block: a swung tick moves it by up to 0.2 tick (0.0021 of a quarter at swing 60), a tick on a
+// block's edge and MTC's speed trim by less, and a plug-in two tracks play is run twice a block (its second call told a
+// block on, the next block's first call a block back). None of that is a locate: no step may play twice, none be lost.
+
+// One process call: its frames, the place it is told, and where its output goes in the song (from its frame).
+struct Call
+{
+    uint32_t frames;
+    double beats;
+    uint64_t at;
+};
+
+// The calls hdslaveOS makes over `blocks` of its blocks at `bpm` and `rate`: each block told the place `place (frame)`
+// at its start, counted on through it. `cut (block)` in 1..127 plays a block in two calls split there (an instrument
+// is played in parts, split where a note falls); `twice` runs every block twice (a plug-in two tracks share).
+std::vector<Call> hostCalls (uint64_t blocks, double bpm, double rate, const std::function<double (uint64_t)>& place,
+                             const std::function<uint32_t (uint64_t)>& cut = {}, bool twice = false)
+{
+    const double perFrame = bpm / 60.0 / rate;
+    std::vector<Call> calls;
+    for (uint64_t b = 0; b < blocks; ++b)
+    {
+        const uint64_t at = b * 128;
+        for (int run = 0; run < (twice ? 2 : 1); ++run)
+        {
+            const double told = place (at) + run * 128 * perFrame;
+            const uint32_t s = cut ? cut (b) : 0;
+            if (s > 0 && s < 128)
+            {
+                calls.push_back ({ s, told, at });
+                calls.push_back ({ 128 - s, told + s * perFrame, at + s });
+            }
+            else
+                calls.push_back ({ 128, told, at });
+        }
+    }
+    return calls;
+}
+
+// Plays the calls, the song playing throughout; each call's output is added where it goes.
+std::vector<float> playCalls (Instance& a, const std::vector<Call>& calls, double bpm)
+{
+    std::vector<float> l (calls.empty() ? 0 : calls.back().at + calls.back().frames, 0.0f), cl (128), cr (128);
+    Events none;
+    OutEvents ignored;
+    int64_t steady = 0;
+    for (const auto& c : calls)
+    {
+        clap_event_transport tr {};
+        tr.header = { sizeof (clap_event_transport), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_TRANSPORT, 0 };
+        tr.flags = CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_HAS_BEATS_TIMELINE | CLAP_TRANSPORT_IS_PLAYING;
+        tr.tempo = bpm;
+        tr.song_pos_beats = (clap_beattime) std::llround (c.beats * (double) CLAP_BEATTIME_FACTOR);
+        std::fill (cl.begin(), cl.end(), 0.0f);
+        std::fill (cr.begin(), cr.end(), 0.0f);
+        float* outs[2] = { cl.data(), cr.data() };
+        clap_audio_buffer buffer {};
+        buffer.data32 = outs;
+        buffer.channel_count = 2;
+        clap_process p {};
+        p.steady_time = steady;
+        p.frames_count = c.frames;
+        p.transport = &tr;
+        p.audio_outputs = &buffer;
+        p.audio_outputs_count = 1;
+        p.in_events = &none.in;
+        p.out_events = &ignored.out;
+        CHECK (a.plugin->process (a.plugin, &p) != CLAP_PROCESS_ERROR);
+        steady += c.frames;
+        for (uint32_t i = 0; i < c.frames; ++i)
+            l[(size_t) (c.at + i)] += cl[i];
+    }
+    return l;
+}
+
+// hdslaveOS's place at a frame with the sequencer's swing (`swing` %): its ticks (96 a quarter) are swing/50 of their
+// length in the first sixteenth of each eighth and (100 - swing)/50 in the second, and the place is the next tick's
+// number less the frames still to it in plain ticks (EngineHost: song = (tick_now - until_tick / tick_length) / 96).
+// So it stands 0.2 tick back at each long tick's start (swing 60), 0.2 on at each short one's; never before the top.
+struct SwungPlace
+{
+    double base;   // frames a plain tick
+    double swing;
+    std::vector<double> starts { 0.0 }; // each tick's first frame
+    size_t from = 0;                    // the tick the last frame asked for was in
+    SwungPlace (double bpm, double rate, double swingPercent) : base (rate * 60.0 / bpm / 96.0), swing (swingPercent) {}
+    double length (size_t k) const { return (k % 48) < 24 ? base * swing / 50.0 : base * (100.0 - swing) / 50.0; }
+    // The first frame of tick k.
+    double tickAt (size_t k)
+    {
+        while (starts.size() <= k + 1)
+            starts.push_back (starts.back() + length (starts.size() - 1));
+        return starts[k];
+    }
+    double operator() (uint64_t frame)
+    {
+        size_t k = tickAt (from) <= (double) frame ? from : 0;
+        while (tickAt (k + 1) <= (double) frame)
+            ++k;
+        from = k;
+        return std::max (0.0, ((double) k + 1.0 - (tickAt (k + 1) - (double) frame) / base) / 96.0);
+    }
+};
+
+// A stretch's energy (its samples squared, summed).
+double stretchEnergy (const std::vector<float>& l, long from, long n)
+{
+    double e = 0.0;
+    for (long i = from; i < from + n && i < (long) l.size(); ++i)
+        e += (double) l[(size_t) i] * l[(size_t) i];
+    return e;
+}
+
+// How a run's clocks played: each clock expected at expect[k] (frames), its stretch's energy against a lone hit's. A
+// clock played twice holds more (its hit begun again before it died away), a lost one almost none; `worst`: the
+// farthest a hit started from its clock. Only the stretches that end inside the song count (the place told near its
+// end may bring the next clock in early).
+struct Played
+{
+    int clocks = 0, hits = 0, twice = 0, lost = 0;
+    long worst = 0;
+};
+Played played (const std::vector<float>& l, const std::vector<double>& expect, double lone, double twiceAbove)
+{
+    Played p;
+    const long early = 400; // a stretch starts this far before its clock
+    long end = 0;           // where the last stretch counted ends
+    for (size_t k = 0; k + 1 < expect.size() && (long) expect[k + 1] - early <= (long) l.size(); ++k)
+    {
+        const long from = std::max (0L, (long) expect[k] - early);
+        end = (long) expect[k + 1] - early;
+        const double e = stretchEnergy (l, from, end - from);
+        ++p.clocks;
+        p.twice += e > lone * twiceAbove;
+        p.lost += e < lone * 0.5;
+    }
+    for (long h : onsets (l))
+    {
+        if (h >= end)
+            break;
+        ++p.hits;
+        long nearest = 1L << 40;
+        for (double x : expect)
+            nearest = std::min (nearest, std::labs (h - (long) std::llround (x)));
+        p.worst = std::max (p.worst, nearest);
+    }
+    return p;
+}
+
+// The median of the stretches' energies: a lone hit's, from a straight run.
+double loneHit (const std::vector<float>& l, const std::vector<double>& expect)
+{
+    std::vector<double> e;
+    for (size_t k = 0; k + 1 < expect.size(); ++k)
+        e.push_back (stretchEnergy (l, std::max (0L, (long) expect[k] - 400), (long) (expect[k + 1] - expect[k])));
+    std::nth_element (e.begin(), e.begin() + (long) e.size() / 2, e.end());
+    return e.empty() ? 0.0 : e[e.size() / 2];
+}
+
+void testPositionJitter()
+{
+    const double rate = 44100.0;
+    // Each tempo's song: 1/32 clicks, every one alike; the clocks of a straight place, where they fall; a lone hit.
+    for (double bpm : { 127.0, 40.0 })
+    {
+        const double perFrame = bpm / 60.0 / rate, grid = 0.125;
+        const double beats = bpm > 100.0 ? 64.0 : 24.0;
+        const uint64_t blocks = (uint64_t) (beats / perFrame / 128.0);
+        const uint64_t frames = blocks * 128;
+        std::vector<double> straightAt;
+        for (int k = 0; k * grid / perFrame < (double) frames + grid / perFrame; ++k) // one past the song's end
+            straightAt.push_back (k * grid / perFrame);
+        const long offBy = (long) (0.003 / perFrame) + 48; // within 0.003 quarter of its clock (the place's own error)
+        auto song = [&] (const std::vector<Call>& calls) {
+            Instance a (rate);
+            a.setup (clickPatch (a, { { "Clock Div", a.valueOf ("Clock Div", "1/32") } }));
+            return playCalls (a, calls, bpm);
+        };
+        const auto straight = song (hostCalls (blocks, bpm, rate, [&] (uint64_t at) { return (double) at * perFrame; }));
+        const double lone = loneHit (straight, straightAt);
+        auto check = [&] (const char* name, const std::vector<float>& l, const std::vector<double>& expect, double twiceAbove, long within) {
+            const auto p = played (l, expect, lone, twiceAbove);
+            if (debug)
+                std::printf ("debug jitter %.0f BPM %s: %d clocks, %d hits, %d twice, %d lost, worst %ld frames\n", bpm, name, p.clocks,
+                             p.hits, p.twice, p.lost, p.worst);
+            CHECK (p.twice == 0 && p.lost == 0);
+            CHECK (p.hits == p.clocks);
+            CHECK (p.worst <= within);
+        };
+        check ("straight", straight, straightAt, 1.12, 48);
+
+        // Up to 0.002 quarter off the line, either way, block by block.
+        std::mt19937 random (7);
+        std::vector<double> off (blocks + 1);
+        for (auto& o : off)
+            o = std::uniform_real_distribution<double> (-0.002, 0.002) (random);
+        auto jittered = [&] (uint64_t at) { return std::max (0.0, (double) at * perFrame + off[at / 128]); };
+        check ("off 0.002", song (hostCalls (blocks, bpm, rate, jittered)), straightAt, 1.12, offBy);
+        // The same, each block played in two parts split where a note falls.
+        std::vector<uint32_t> cuts (blocks);
+        for (auto& c : cuts)
+            c = 1 + (uint32_t) (random() % 127);
+        check ("off 0.002, in parts", song (hostCalls (blocks, bpm, rate, jittered, [&] (uint64_t b) { return cuts[b]; })), straightAt, 1.12, offBy);
+
+        // The sequencer's swing at 60 %: the place stands back 0.2 tick at each long tick, on at each short one. The
+        // clocks fall where the swung ticks put them.
+        SwungPlace swung (bpm, rate, 60.0);
+        std::vector<double> swungAt;
+        for (size_t k = 0; k < straightAt.size(); ++k)
+            swungAt.push_back (swung.tickAt (k * 12));
+        check ("swing 60", song (hostCalls (blocks, bpm, rate, [&] (uint64_t at) { return swung (at); })), swungAt, 1.12, offBy);
+
+        // Run twice a block (two tracks play it): each block's second run is told a block on, the next block's first a
+        // block back. Each clock plays once, in the run told its place first (a block early in the song). The runs'
+        // outputs overlap here, so a hit is set against the run's own median.
+        std::vector<double> earlyAt { 0.0 };
+        for (size_t k = 1; k < straightAt.size(); ++k)
+            earlyAt.push_back (straightAt[k] - 128.0);
+        const auto shared = song (hostCalls (blocks, bpm, rate, [&] (uint64_t at) { return (double) at * perFrame; }, {}, true));
+        const double sharedLone = loneHit (shared, earlyAt);
+        const auto p = played (shared, earlyAt, sharedLone, 1.4);
+        if (debug)
+            std::printf ("debug jitter %.0f BPM run twice: %d clocks, %d hits, %d twice, %d lost, worst %ld frames\n", bpm, p.clocks,
+                         p.hits, p.twice, p.lost, p.worst);
+        CHECK (p.twice == 0 && p.lost == 0 && p.hits == p.clocks && p.worst <= 48);
+    }
+    // A real locate still counts: the place moved back across a clock by more than a 64th note plays that clock again
+    // when the song reaches it; by less, the clock is held. Two beats of 1/32 at 127 BPM, the place moved back 0.03
+    // quarter after the clock at beat 1.
+    {
+        const double bpm = 127.0, perFrame = bpm / 60.0 / rate;
+        const uint64_t blocks = (uint64_t) (2.0 / perFrame / 128.0), at = (uint64_t) (1.03 / perFrame / 128.0) * 128;
+        for (double by : { 0.05, 0.08 })
+        {
+            Instance a (rate);
+            a.setup (clickPatch (a, { { "Clock Div", a.valueOf ("Clock Div", "1/32") } }));
+            const auto l = playCalls (a, hostCalls (blocks, bpm, rate, [&] (uint64_t f) { return (double) f * perFrame - (f >= at ? by : 0.0); }), bpm);
+            const size_t hits = onsets (l).size();
+            if (debug)
+                std::printf ("debug jitter locate back %.2f: %zu hits\n", by, hits);
+            CHECK (hits == (by < 0.0625 ? 16u : 17u));
+        }
+    }
+}
+
 void testBlockSizes()
 {
     // The same transport and events heard in blocks of 128, 37, 1 and 4096 frames: the same output, to the bit.
@@ -1940,6 +2187,7 @@ int main (int argc, char** argv)
     testRhythms();
     testStopRestartJump();
     testLoopsAndClockChanges();
+    testPositionJitter();
     testBlockSizes();
     testPitch();
     testEnvelopesAndNotes();

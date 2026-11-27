@@ -139,6 +139,13 @@ same samples as the demo's list.
   not started twice; a downbeat the loop's end left silent plays then, at most a block late (2.7 ms at 128 frames).
 - A tempo change inside a block moves the host's place a few frames from where the clock counted: followed as it is,
   no clock played twice, a clock passed played at once.
+- So does a place a little off its line, either way, by less than a 64th note: hdslaveOS works the place out from its
+  ticks, so a swung tick, a tick on a block's edge or MTC's trim puts it up to 0.0021 of a quarter off from block to
+  block, and a plug-in two tracks play is run twice a block (its next block's first call told a block back). A step
+  back holds the clocks already played until the song is past them again. Before 0.2.5 a step back of more than the
+  call's own frames counted as a jump: with the calls in parts, at slow tempos or run twice a block, a clock could play
+  twice or be lost (at 40 BPM with the place up to 0.002 of a quarter off, 57 of 192 clocks of 1/32 played twice). A
+  move of a 64th note or more is a jump, as before.
 - Clock Div changed while playing: the clocks count on the new grid from there; one due on that frame plays.
 - Run off: the host plays but the sequencers hold their steps and nothing fires; Next, Reset and Trigger work as on
   the panel, and the pads play notes (Pads and notes, above). Reset while playing restarts the generators from the
@@ -213,8 +220,9 @@ presets as preset discovery lists them and preset-load loads them; clock timing 
 and two tempos; 3 against 4 across the sequencers, OR and XOR on one; a generator routed nowhere, Run off; stop,
 restart, jumps, a host without a song position, the steps placed by the song's place, a count-in from beat -1; a loop
 wrapping inside a block and told a block late (one hit on the downbeat, not two; a downbeat the loop's end left
-silent still played, in whole blocks and in Melodee's smaller parts), a tempo change inside a block, Clock Div changed
-on a downbeat, Reset and Clock Div in one block;
+silent still played, in whole blocks and in Melodee's smaller parts), a tempo change inside a block, the place off its
+line (up to 0.002 of a quarter either way, also in parts; swing 60's ticks; run twice a block; at 127 and 40 BPM: each
+clock once, near its place) and moved back under and over a 64th note, Clock Div changed on a downbeat, Reset and Clock Div in one block;
 the same output whatever the block size (1, 37, 128, 4096 frames); the VCO range, each quantizer, Fine Tune; Next,
 Reset, the steps on the VCO and on a sub's divisor, a sub following its VCO, Seq 2 on VCO 2, each wave's pitch;
 EG Off with Trigger, EG Hold and back, notes (CLAP, MIDI, a choke, a note off for any key) gating the EGs and moving
@@ -249,4 +257,4 @@ Copy `build/Necronomicon.clap` to `Melodee/Plugins/hdslave/hdslave Necronomicon.
 card's folder), then pick it on an empty track: Stage, Plugin, hdslave, hdslave Necronomicon. It needs only libc and libm, glibc 2.35 or
 newer (the MPC has 2.39); the build is about 1.2 MB.
 
-Version 0.2.4 (a choke for one key stops the voice once no key is held; all 49 fingerprints as they were) passed the Linux host tests above. Melodee 0.7.1 and hdslaveOS both rendered its custom screen at 0.2.3; the page is unchanged since. Physical MPC testing is pending.
+Version 0.2.5 (a place a little off its line plays no clock twice; all 49 fingerprints as they were) passed the Linux host tests above. Melodee 0.7.1 and hdslaveOS both rendered its custom screen at 0.2.3; the page is unchanged since. Physical MPC testing is pending.
