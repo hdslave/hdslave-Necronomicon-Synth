@@ -432,6 +432,7 @@ public:
         tick = 0;
         playing = regridWanted = resetWanted = false;
         lastClock = -1;
+        reached = -1.0e300;
         rhythmPosition = 0;
         origin = 0;
         countedGrid = clockBeats();
@@ -612,6 +613,8 @@ public:
             relocate (beats, 128.0, false); // Play: a fixed tolerance (the host's own block), never this call's size
         else if (moved > 0.5 * perFrame && moved >= window * perFrame && moved > jumpBeats + jumpSlack)
             relocate (beats, window, true);
+        else if (beats < position)
+            reached = std::max (reached, position); // held: where the clocks got to, for a Clock Div change meanwhile
         playing = true;
         position = beats;
     }
@@ -707,6 +710,7 @@ private:
         origin = 0;
         regridWanted = resetWanted = false;
         countedGrid = grid;
+        reached = -1.0e300;
         // A jump whose clock b fell on the very frame a clock played here: a loop gone round inside a block (the host
         // tells only at the next one, so the clocks ran on past the loop's end; its end is its start). That clock
         // was b: the steps line up with b, and the EGs are not started again, unless the clock played then started
@@ -753,7 +757,8 @@ private:
     void regrid()
     {
         const double grid = clockBeats();
-        lastClock = (int64_t) std::floor ((position - perFrame * (1.0 - clockSlack)) / grid + 1.0e-9);
+        // From where the clocks got to: while the place is held behind them, not the place.
+        lastClock = (int64_t) std::floor ((std::max (position, reached) - perFrame * (1.0 - clockSlack)) / grid + 1.0e-9);
         if (origin != 0)
             origin = (int64_t) std::ceil ((double) origin * countedGrid / grid - 1.0e-9);
         countedGrid = grid;
@@ -923,6 +928,7 @@ private:
 
     static constexpr int maxHeld = 16;
     double rate = 48000.0, perFrame = 0.0, position = 0.0;
+    double reached = -1.0e300; // the furthest place the clocks got to while the place stepped back (a hold); none
     float inner = 96000.0f, invInner = 1.0f / 96000.0f, maxDt = 0.1f;
     float knob[ParamId::count] {};
     float target[smoothed] {}, smooth[smoothed] {};

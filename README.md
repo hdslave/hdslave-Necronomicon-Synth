@@ -146,7 +146,8 @@ same samples as the demo's list.
   call's own frames counted as a jump: with the calls in parts, at slow tempos or run twice a block, a clock could play
   twice or be lost (at 40 BPM with the place up to 0.002 of a quarter off, 57 of 192 clocks of 1/32 played twice). A
   move of more than a 64th note is a jump, as before (exactly a 64th, as hdslaveOS has it, is not).
-- Clock Div changed while playing: the clocks count on the new grid from there; one due on that frame plays.
+- Clock Div changed while playing: the clocks count on the new grid from there; one due on that frame plays. While the
+  place is held behind the clocks played (above), they count from where the clocks got to, so none plays again.
 - Run off: the host plays but the sequencers hold their steps and nothing fires; Next, Reset and Trigger work as on
   the panel, and the pads play notes (Pads and notes, above). Reset while playing restarts the generators from the
   next clock (a Clock Div change after it keeps that moment), until the next Play or jump lines them up with the song
