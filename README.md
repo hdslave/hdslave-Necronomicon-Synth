@@ -29,8 +29,9 @@ VCO 1, its subs, VCO 2, its subs ──► mixer (six levels; overdrives when ho
 host clock (Clock Div) ──► RHYTHM 1 … 4 (every 1st … 16th clock) ──OR / XOR──► SEQ 1 and / or SEQ 2 (4 steps each)
 SEQ 1 ──► VCO 1's pitch and / or its subs' divisors        SEQ 2 ──► the same for VCO 2
 every step of either sequencer ──► both EGs (EG: On)
-Run on: notes 36–51 (pads 1–16) ──► a step of SEQ 1 or SEQ 2, heard without moving the sequencer, and both EGs
-any other note (every note with Run off) ──► both VCOs' pitch (from middle C) and a gate on both EGs
+Run on: every note is a pad (36–51 pads 1–16, the banks above and below the same pads an octave a bank)
+        ──► a step of SEQ 1 or SEQ 2, heard without moving the sequencer, an octave a bank, and both EGs
+Run off: every note ──► both VCOs' pitch (from middle C) and a gate on both EGs
 ```
 
 A subharmonic counts its VCO's cycles, so it stays locked to it in phase whatever the VCO does: VCO 1 at C and its
@@ -78,25 +79,34 @@ The public controls, in host parameter order.
 
 ### Pads and notes
 
-**Sequencer on (Run: Run), pads 1–16 play the steps; off (Run: Stop), the pads play notes.** On a Melodee plug-in
-track at its defaults (octave 2, key C, Chromatic) pads A01–A16 send notes 36–51, pad 1 at the bottom left. Since
-0.2.0:
+**Sequencer on (Run: Run), pads 1–16 play the steps; off (Run: Stop), the pads play notes.** Since 0.3.0 the plug-in
+carries a drum map in its file (the form Melodee reads from a drum machine's library), so on hdslaveOS (and Melodee) a
+plug-in track on it plays its pads as Drums: pads A01–A16 send notes 36–51, pad 1 at the bottom left, whatever the
+track's octave, key or scale, and the Keys page names them (S1 Step 1 … S2 Step 4, twice). The − / + buttons then
+move the pad **bank** instead of the octave: bank B sends 52–67, C 68–83, D 84–99. While Run is on, the plug-in reads
+any note as a pad and a bank: pad = (note − 36) mod 16, bank = (note − 36) div 16 (rounded down), the bank held to
+three above A and two below. A bank is an octave: every bank plays the same 16 pads, 12 semitones higher a bank up
+(banks A–D: 0, +1, +2, +3 octaves).
 
-- **Run on, whether or not the song plays:** each pad is a step. The bottom row (notes 36–39) is Seq 1's steps 1–4,
-  the second row (40–43) Seq 2's steps 1–4, and the top two rows (44–51) the same again. A pad plays its step as the
-  sequencer would on reaching it: the step's value goes to wherever that sequencer is routed (its VCO's pitch, its
-  subs' divisors), quantized, at the current transposition, and both EGs start as Trigger starts them (in EG: Off
-  too; in EG: Hold the drone just moves, and sounds again after an All Sound Off). The sequencer itself does not move: its next step at a clock (or Reset,
-  or Next, or a Play or jump lining the steps up with the song again) takes over, and the pattern carries on where
-  it was. A pad plays once (letting go of it does
-  nothing) and never transposes. Two pads on one frame: one of each sequencer both apply; two of one sequencer, the
+- **Run on, whether or not the song plays:** each pad is a step. The bottom row (pads 1–4) is Seq 1's steps 1–4,
+  the second row (pads 5–8) Seq 2's steps 1–4, and the top two rows (pads 9–16) the same again; in every bank. A pad
+  plays its step as the sequencer would on reaching it: the step's value goes to wherever that sequencer is routed
+  (its VCO's pitch, its subs' divisors), quantized, at the current transposition plus its bank's octaves (bank B's
+  pad 1, note 52, is Seq 1's step 1 an octave up), and both EGs start as Trigger starts them (in EG: Off too; in
+  EG: Hold the drone just moves, and sounds again after an All Sound Off). The sequencer itself does not move: its
+  next step at a clock (or Reset, or Next, or a Play or jump lining the steps up with the song again) takes over,
+  with no octave left over, and the pattern carries on where it was. A pad plays once (letting go of it does
+  nothing) and holds no gate. Two pads on one frame: one of each sequencer both apply; two of one sequencer, the
   later wins; the EGs start once. A pad on the very frame a clock steps its sequencer gives way to that step.
-- **Run on, any note outside 36–51** does what every note did before: it moves both VCOs by its distance from middle C
-  (note 60), as the panel's VCO 1 input does (normalled to VCO 2), and holds both EGs at the top while it is down. The
-  pitch stays where the last note put it, so playing those notes transposes the running pattern (and the pads' steps
-  with it).
-- **Run off:** every note, the pads included, works that way: with EG: Off and the transport stopped, the pads play
-  the synth like a monophonic keyboard.
+- **Run off:** every note plays its own pitch, exactly as before 0.3.0: it moves both VCOs by its distance from
+  middle C (note 60), as the panel's VCO 1 input does (normalled to VCO 2), and holds both EGs at the top while it is
+  down. Bank B's pad 1 (note 52) plays 52, 16 semitones above bank A's pad 1; the banks are not octaves here. The
+  pitch stays where the last note put it, so notes played with Run off transpose the pattern when Run goes on again.
+  With EG: Off and the transport stopped, the pads play the synth like a monophonic keyboard.
+- **What 0.3.0 replaced:** before it, with Run on, notes outside 36–51 transposed the running pattern and gated the
+  EGs as notes. They are now step pads in their bank (above). A project saved with notes outside 36–51 played while
+  Run is on (a MIDI clip, an external keyboard) plays them as steps; with Run off nothing changed.
+- There are no drum voices; nothing plays a fixed sound per pad.
 
 A note off and Melodee's All Notes Off (CC 123) end only notes held as notes: a pad's step is never held, so they
 never touch it, and a pad's note off never ends another held note. All Sound Off (CC 120, or a choke for every key)
@@ -176,7 +186,7 @@ are chosen to match what is documented:
 
 Deviations: Trigger is a trigger in EG: Off as in On (on the panel it is a gate there; a plug-in button cannot be
 held, so the gate is left to MIDI notes, which hold the EGs as a gate does); notes carry no velocity, as on the panel.
-The pads as steps (Run on, notes 36–51) are this plug-in's own: the panel has no pads.
+The pads as steps (Run on) and the banks are this plug-in's own: the panel has no pads.
 
 Left out on purpose: the patch bay, the external clock, MIDI CCs, the PWM input and the SEQ OCT / QUANTIZE output
 settings (there are no outputs), and the panel's TEMPO (the clock is the host's; 1/64 is the fastest).
@@ -233,8 +243,10 @@ the sequencer not moved by a pad (stopped: Next then goes to the next step from 
 plays the step it would have), a pad on Play's frame (mid-song it holds until the next clock; from the top the clock
 on that frame takes over), a sequencer no generator moves keeping a pad's step, two pads on one frame (of one
 sequencer the later wins, of both both apply, one hit), on, on, off of one pad (two hits, nothing held), a pad and its
-off under a held note, a choke and a CC 120/123 storm on every channel, notes 35 and 52 still transposing and gating
-and the pads keeping that transposition, Run off (the pads notes again, held as a gate) and on again, and the same
+off under a held note, a choke and a CC 120/123 storm on every channel, the banks (52, 68, 84, 20, 4, 61, 100, 127 and
+120 playing bank A's step an octave a bank, three up and two down at most, as one hit), Run off keys 36, 52, 68, 84
+and 20 at their own pitch as before 0.3.0, Run off (the pads notes again, held as a gate) and on again, the drum map in the binary (16 voices on
+notes 36–51, named, the JSON balanced), and the same
 output with pads inside blocks of 1, 37, 128 and 4096 frames, playing and stopped; a preset loaded while playing heard
 exactly as its values sent as events; a choke for one key silencing the voice once no key is held, and leaving a key
 still held sounding; All Sound Off silencing a Hold drone (All Notes Off not touching it), while
@@ -244,10 +256,10 @@ hostile tempos (0, 2000, nan, infinite) and sample rates, a state from a newer v
 and finite, bounded output at 60 random and extreme settings, never stuck at the ceiling (what a NaN inside would
 give).
 
-`tests/fingerprint.cpp` then renders 49 fixed scenarios (each preset, the bench's patches, 24 random patches with the
+`tests/fingerprint.cpp` then renders 50 fixed scenarios (each preset, the bench's patches, 24 random patches with the
 buttons, notes and knobs moving, other block sizes and rates, stop and jumps, each quantizer and wave, notes while it
 plays, XOR switched while it plays, a loop wrapping inside a block in whole blocks and in parts, the pads as steps
-playing and stopped) and hashes every output sample's bits against `tests/fingerprint.txt`: work
+playing and stopped, the banks with Run on and off) and hashes every output sample's bits against `tests/fingerprint.txt`: work
 meant to keep the sound, such as a speed-up, must leave every hash as it is. A change meant to change the sound
 updates them with `make fingerprint-update` (run inside the build image). The hashes hold for Melodee's build image
 and these compiler flags.
@@ -258,4 +270,4 @@ Copy `build/Necronomicon.clap` to `Melodee/Plugins/hdslave/hdslave Necronomicon.
 card's folder), then pick it on an empty track: Stage, Plugin, hdslave, hdslave Necronomicon. It needs only libc and libm, glibc 2.35 or
 newer (the MPC has 2.39); the build is about 1.2 MB.
 
-Version 0.2.5 (a place a little off its line plays no clock twice; all 49 fingerprints as they were) passed the Linux host tests above. Melodee 0.7.1 and hdslaveOS both rendered its custom screen at 0.2.3; the page is unchanged since. Physical MPC testing is pending.
+Version 0.3.0 (the drum map and the pad banks; 15 of 49 fingerprints moved, every one a scenario playing notes outside 36–51 with Run on, and 1 added) passed the Linux host tests above. Melodee 0.7.1 and hdslaveOS both rendered its custom screen at 0.2.3; the page is unchanged since. Not yet run on the MPC: the drum map, the banks and − / + are untested on the device.

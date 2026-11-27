@@ -10,7 +10,7 @@
 #include <strings.h>
 
 #ifndef NECRONOMICON_VERSION
-#define NECRONOMICON_VERSION "0.2.5"
+#define NECRONOMICON_VERSION "0.3.0"
 #endif
 
 namespace necronomicon
@@ -84,8 +84,23 @@ constexpr float divisorsPerOctave = 3.0f;
 constexpr float fineTuneCents = 50.0f;
 // A MIDI note moves both VCOs from middle C (note 60): it is the panel's 1 V/octave input, normalled to both.
 constexpr int middleC = 60;
-// While Run is on, notes 36 to 51 (pads A01-A16 of a Melodee plug-in track at its defaults) play the steps instead.
+// Pads A01-A16 of an hdslaveOS plug-in track are notes 36 to 51 (the plug-in's drum map has it play them so whatever
+// the octave, key or scale); while Run is on they play the steps.
 constexpr int firstPad = 36;
+constexpr int padCount = 16;
+// Which pad a key plays while Run is on, and how far it moves it: keys 36-51 the sixteen pads; the banks above and
+// below (- / + on the MPC: B 52-67, C 68-83, D 84-99) the same sixteen, 12 semitones up a bank (at most three up,
+// two down). With Run off a key plays its own pitch, as it always did.
+struct PadKey { int slot; int shift; };
+constexpr PadKey padOf (int key)
+{
+    const int from = key - firstPad;
+    const int bank = from >= 0 ? from / padCount : -((-from + padCount - 1) / padCount);
+    return { from - bank * padCount, 12 * (bank < -2 ? -2 : bank > 3 ? 3 : bank) };
+}
+static_assert (padOf (36).slot == 0 && padOf (51).slot == 15 && padOf (52).slot == 0 && padOf (52).shift == 12);
+static_assert (padOf (84).slot == 0 && padOf (84).shift == 36 && padOf (99).slot == 15 && padOf (100).shift == 36);
+static_assert (padOf (35).slot == 15 && padOf (35).shift == -12 && padOf (0).shift == -24 && padOf (127).shift == 36);
 
 inline const char* const offOn[] = { "Off", "On" };
 // UP: the VCO and its two subs square; MIDDLE: the VCO a pulse whose width SUB 1's sawtooth moves, the subs

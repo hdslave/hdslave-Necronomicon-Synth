@@ -142,6 +142,18 @@ std::vector<Scenario> scenarios()
     padsStopped.preset = "subharmonic-chords";
     padsStopped.transport = [] (uint64_t, double, double) -> std::pair<bool, double> { return { false, 0.0 }; };
     list.push_back (padsStopped);
+    // 0.3.0: the banks (- / + on the MPC with the drum map): with Run on every key a step pad, an octave a bank,
+    // playing; then Run off, every key its own pitch as before.
+    Scenario banks;
+    banks.name = "pad-banks";
+    banks.preset = "polyrhythm-bass";
+    banks.seconds = 5.0;
+    banks.events = { { 6000, Event::noteOn, "", 52 }, { 20000, Event::noteOn, "", 69 }, { 34000, Event::noteOn, "", 84 },
+                     { 48000, Event::noteOn, "", 20 }, { 62000, Event::noteOn, "", 61 }, { 62000, Event::noteOn, "", 101 },
+                     { 80000, Event::noteOn, "", 127 }, { 96000, Event::noteOn, "", 3 }, { 110000, Event::param, "Run", 0.0 },
+                     { 120000, Event::noteOn, "", 52 }, { 140000, Event::noteOff, "", 52 }, { 150000, Event::noteOn, "", 70 },
+                     { 175000, Event::noteOn, "", 30 }, { 190000, Event::noteOff, "", 30 }, { 210000, Event::noteOff, "", 70 } };
+    list.push_back (banks);
     return list;
 }
 } // namespace

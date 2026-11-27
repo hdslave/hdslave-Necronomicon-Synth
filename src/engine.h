@@ -7,8 +7,9 @@
 //   4 rhythm generators (the clock divided by 1 to 16) ──OR / XOR──► SEQ 1 and SEQ 2 (4 steps each)
 //   SEQ 1 ──► VCO 1's pitch and/or its subs' divisors; SEQ 2 the same for VCO 2
 //   every step of either sequencer ──► both EGs (EG On)
-//   Run on: notes 36-51 (the pads) ──► a step of SEQ 1 or SEQ 2 shown without moving it, both EGs; other notes ──►
-//   both VCOs' pitch from middle C and a gate on both EGs (Run off: every note)
+//   Run on: every note is a pad (36-51 bank A, the banks above and below an octave each) ──► a step of SEQ 1 or
+//   SEQ 2 shown without moving it, an octave a bank, both EGs; Run off: every note ──► both VCOs' pitch from middle C
+//   and a gate on both EGs
 //
 // The clock is the host's: one every Clock Div from the song's top while the host plays. Rhythm generator n fires
 // on every Rhythm n-th clock from the top (or from Reset), so all four line up on the downbeat.
@@ -497,25 +498,28 @@ public:
         }
     }
 
-    // A MIDI note. While Run is on, the pads of a Melodee plug-in track (notes 36 to 51 at its defaults, rows of four
-    // from the bottom) are the steps: 36-39 Seq 1's steps 1-4, 40-43 Seq 2's, 44-51 the same again. A step pad shows
-    // its step on that sequencer's outputs as the sequencer stepping onto it would (the step's value, quantized, at
-    // the current transposition), without moving the sequencer, until that sequencer's next step at a clock, Reset,
-    // Next, or a Play or jump lining the steps up with the song again; and it starts both EGs as Trigger does (in
+    // A MIDI note. While Run is on every key is a step pad (padOf in params.h): pads A01-A16 are keys 36-51 (the
+    // plug-in's drum map has hdslaveOS play them so whatever the octave, key or scale), and the banks above and below
+    // play the same sixteen an octave a bank higher or lower (three up, two down at most). The steps: 36-39 Seq 1's
+    // steps 1-4, 40-43 Seq 2's, 44-51 the same again. A step pad shows its step on that sequencer's outputs as the
+    // sequencer stepping onto it would (the step's value, quantized, at the current transposition, plus its bank's
+    // octaves), without moving the sequencer, until that sequencer's next step at a clock, Reset, Next, or a Play or jump lining the steps up with the song again; and it starts both EGs as Trigger does (in
     // EG: Hold, no new attack: the drone moves, and sounds again after a panic). One-shot: it holds no gate and never transposes,
     // and it never joins the keys held below, so its note off finds nothing to end (only the same key held as a note
     // before Run went on, which that off lets go of).
-    // Every other note, and every note with Run off: both VCOs move by its distance from middle C (the panel's
-    // 1 V/octave input, normalled to both) and stay there after it ends; the EGs start and hold at the top while any
-    // note is down. The last note held wins.
+    // With Run off, every note: both VCOs move by its distance from middle C (the panel's 1 V/octave input, normalled
+    // to both) and stay there after it ends; the EGs start and hold at the top while any note is down. The last note
+    // held wins.
     void noteOn (int key)
     {
         silenced = false; // a fresh note sounds again after a panic
-        if (knob[ParamId::run] >= 0.5f && key >= firstPad && key < firstPad + 16)
+        if (knob[ParamId::run] >= 0.5f)
         {
-            const int pad = key - firstPad;
-            shown[(pad >> 2) & 1] = pad & 3;
-            shownAt[(pad >> 2) & 1] = (int64_t) now;
+            const PadKey pad = padOf (key);
+            const int s = (pad.slot >> 2) & 1;
+            shown[s] = pad.slot & 3;
+            shownAt[s] = (int64_t) now;
+            shownShift[s] = (float) pad.shift;
             snapPitch();
             if (egMode() != 2)
                 vcfEg.trigger(), vcaEg.trigger();
@@ -801,10 +805,11 @@ private:
         {
             const uint32_t at = n == 0 ? 0u : 1u; // sequencer n plays VCO n
             const int on = shown[n] >= 0 ? shown[n] : step[n]; // a step pad's step, else the sequencer's
+            const float shift = shown[n] >= 0 ? shownShift[n] : 0.0f; // a step pad's bank, in semitones
             const float stepped = knob[(at ? seq2Step1 : seq1Step1) + on] * octaves;
             // The VCO: its knob, the step (when assigned) and the note, quantized together; then Fine Tune.
             const float pitch = knob[at ? vco2Freq : vco1Freq] * vcoOctaves + (knob[at ? seq2Osc : seq1Osc] >= 0.5f ? stepped : 0.0f)
-                              + transpose * (1.0f / 12.0f);
+                              + (transpose + shift) * (1.0f / 12.0f);
             target[pitch1 + n] = std::log2 (vcoLowHz) + quantizePitch (pitch, mode) + fine;
             // Its subs: the knob's divisor, moved by the step when assigned (up: a smaller divisor).
             for (int k = 0; k < 2; ++k)
@@ -943,6 +948,7 @@ private:
     int step[2] {};
     int shown[2] { -1, -1 }; // the step a step pad put on each sequencer's outputs (-1: the sequencer's own)
     int64_t shownAt[2] {};   // the frame that pad arrived (a pad in Play's own block survives its relocate)
+    float shownShift[2] {};  // that pad's bank: 12 semitones a bank above A (below: negative)
     int keys[maxHeld] {};
     int held = 0;
     int64_t lastClock = -1, origin = 0, rhythmPosition = 0;

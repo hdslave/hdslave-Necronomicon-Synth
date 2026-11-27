@@ -1,7 +1,7 @@
 // Loads Necronomicon.clap as a host does and checks it: description and ports, parameters (the steps' text following
 // Seq Oct), state, presets, the clock against the host's transport (timing to the frame, stop, restart, jumps, a loop
 // that wraps inside a block), the rhythm generators (polyrhythms, OR and XOR), the sequencers' pitches on the VCOs
-// and on the subs' divisors, the quantizer, the EG modes, notes, the pads as steps while Run is on, Reset, Next and
+// and on the subs' divisors, the quantizer, the EG modes, notes, the pads as steps while Run is on (and their banks, and the drum map in the binary), Reset, Next and
 // Trigger, the same output whatever the block size, and bounded output at extreme settings. Writes demo renders as WAV
 // files into the output folder.
 //   host Necronomicon.clap OUT_FOLDER
@@ -1259,11 +1259,11 @@ void testEnvelopesAndNotes()
         });
         CHECK (rms (l, 4800, 4800) > 0.1 && std::fabs (rms (l, 38400, 4800) - rms (l, 4800, 4800)) < 0.01 && rms (l, 72000, 4800) < 1e-4);
     }
-    // A note (stopped): the EGs rise and hold at the top while it is down, then decay. A short VCA decay: silent soon
+    // A note (stopped, Run off: with Run on every key is a step pad): the EGs rise and hold at the top while it is down, then decay. A short VCA decay: silent soon
     // after the note ends.
     {
         Instance a;
-        a.setup (clickPatch (a, { { "VCA Decay", 0.3 } }));
+        a.setup (clickPatch (a, { { "VCA Decay", 0.3 }, { "Run", 0.0 } }));
         a.render (48000, 128, l, r, [] (uint64_t) { return stopped; }, [&] (uint64_t at, uint32_t, Events& e) {
             if (at == 128 * 10) e.note (0, CLAP_EVENT_NOTE_ON, 60);
             if (at == 128 * 200) e.note (0, CLAP_EVENT_NOTE_OFF, 60);
@@ -1271,14 +1271,14 @@ void testEnvelopesAndNotes()
         CHECK (rms (l, 3000, 2400) > 0.1 && std::fabs (rms (l, 20000, 2400) - rms (l, 3000, 2400)) < 0.01 && rms (l, 40000, 2400) < 1e-4);
         // A MIDI note on and off does the same; a choke ends every note.
         Instance b;
-        b.setup (clickPatch (b, { { "VCA Decay", 0.3 } }));
+        b.setup (clickPatch (b, { { "VCA Decay", 0.3 }, { "Run", 0.0 } }));
         b.render (48000, 128, l, r, [] (uint64_t) { return stopped; }, [&] (uint64_t at, uint32_t, Events& e) {
             if (at == 128 * 10) e.midi (0, 0x90, 60, 100);
             if (at == 128 * 200) e.midi (0, 0x80, 60, 0);
         });
         CHECK (rms (l, 3000, 2400) > 0.1 && rms (l, 40000, 2400) < 1e-4);
         Instance c;
-        c.setup (clickPatch (c, { { "VCA Decay", 0.3 } }));
+        c.setup (clickPatch (c, { { "VCA Decay", 0.3 }, { "Run", 0.0 } }));
         c.render (48000, 128, l, r, [] (uint64_t) { return stopped; }, [&] (uint64_t at, uint32_t, Events& e) {
             if (at == 128 * 10) e.note (0, CLAP_EVENT_NOTE_ON, 60), e.note (0, CLAP_EVENT_NOTE_ON, 64);
             if (at == 128 * 200) e.note (0, CLAP_EVENT_NOTE_CHOKE, -1);
@@ -1286,17 +1286,17 @@ void testEnvelopesAndNotes()
         CHECK (rms (l, 3000, 2400) > 0.1 && rms (l, 40000, 2400) < 1e-4);
         // A note off for key -1 (any key) ends every note too.
         Instance d;
-        d.setup (clickPatch (d, { { "VCA Decay", 0.3 } }));
+        d.setup (clickPatch (d, { { "VCA Decay", 0.3 }, { "Run", 0.0 } }));
         d.render (48000, 128, l, r, [] (uint64_t) { return stopped; }, [&] (uint64_t at, uint32_t, Events& e) {
             if (at == 128 * 10) e.note (0, CLAP_EVENT_NOTE_ON, 60), e.note (0, CLAP_EVENT_NOTE_ON, 67);
             if (at == 128 * 200) e.note (0, CLAP_EVENT_NOTE_OFF, -1);
         });
         CHECK (rms (l, 3000, 2400) > 0.1 && rms (l, 40000, 2400) < 1e-4);
     }
-    // Notes move both VCOs from middle C, and the last one stays after it ends: 72 an octave up, then 55 (G3).
+    // Notes (Run off) move both VCOs from middle C, and the last one stays after it ends: 72 an octave up, then 55 (G3).
     {
         Instance a;
-        a.setup (dronePatch (a, { { "VCO 1 Freq", 0.0 }, { "EG", a.valueOf ("EG", "On") }, { "VCA Decay", 1.0 } }));
+        a.setup (dronePatch (a, { { "VCO 1 Freq", 0.0 }, { "EG", a.valueOf ("EG", "On") }, { "VCA Decay", 1.0 }, { "Run", 0.0 } }));
         a.render (48000 * 2, 128, l, r, [] (uint64_t) { return stopped; }, [&] (uint64_t at, uint32_t, Events& e) {
             if (at == 0) e.note (0, CLAP_EVENT_NOTE_ON, 72);
             if (at == 128 * 300) e.note (0, CLAP_EVENT_NOTE_OFF, 72), e.note (1, CLAP_EVENT_NOTE_ON, 55);
@@ -1349,7 +1349,7 @@ void testStepPads()
         a.render (28800, block, out, right, still, [&] (uint64_t at, uint32_t, Events& e) { events (at, e, a); });
     };
     // Each pad against the sequencer playing that step: Next pressed up to it and Trigger, on the pad's frame (the
-    // other sequencer's steps all alike, since Next moves it too), after a note (64) has transposed both VCOs. In EG
+    // other sequencer's steps all alike, since Next moves it too), after a note (64, Run off) has transposed both VCOs. In EG
     // On, Off (the pad starts the EGs as Trigger does) and Hold (it only moves the pitch); a CLAP note and a MIDI one.
     for (int seq = 0; seq < 2; ++seq)
         for (double mode : { 1.0, 0.0, 2.0 }) // EG: On, Off, Hold
@@ -1358,24 +1358,24 @@ void testStepPads()
                 Values extra { { "EG", mode } };
                 for (int k = 1; k <= 4; ++k)
                     extra.push_back ({ "Seq " + std::to_string (2 - seq) + " Step " + std::to_string (k), seq == 0 ? -0.15 : 0.1 });
-                auto before = [] (uint64_t at, Events& e) {
-                    if (at == 128 * 5) e.note (0, CLAP_EVENT_NOTE_ON, 64);
-                    if (at == 128 * 6) e.note (0, CLAP_EVENT_NOTE_OFF, 64);
+                auto before = [] (uint64_t at, Events& e, Instance& a) {
+                    if (at == 128 * 5) a.set (e, "Run", 0.0), e.note (0, CLAP_EVENT_NOTE_ON, 64);
+                    if (at == 128 * 6) e.note (0, CLAP_EVENT_NOTE_OFF, 64), a.set (e, "Run", 1.0);
                 };
                 std::vector<float> pad, padMidi, sequencer;
                 const int16_t key = (int16_t) (36 + 4 * seq + i);
-                play (extra, [&] (uint64_t at, Events& e, Instance&) {
-                    before (at, e);
+                play (extra, [&] (uint64_t at, Events& e, Instance& a) {
+                    before (at, e, a);
                     if (at == 128 * 40) e.note (0, CLAP_EVENT_NOTE_ON, key);
                     if (at == 128 * 60) e.note (0, CLAP_EVENT_NOTE_OFF, key);
                 }, pad);
-                play (extra, [&] (uint64_t at, Events& e, Instance&) { // pads 44-51 are 36-43 again; as MIDI
-                    before (at, e);
+                play (extra, [&] (uint64_t at, Events& e, Instance& a) { // pads 44-51 are 36-43 again; as MIDI
+                    before (at, e, a);
                     if (at == 128 * 40) e.midi (0, 0x90, (uint8_t) (key + 8), 100);
                     if (at == 128 * 60) e.midi (0, 0x80, (uint8_t) (key + 8), 0);
                 }, padMidi);
                 play (extra, [&] (uint64_t at, Events& e, Instance& a) {
-                    before (at, e);
+                    before (at, e, a);
                     if (at == 128 * 40)
                     {
                         for (int n = 0; n < i; ++n)
@@ -1479,21 +1479,56 @@ void testStepPads()
                   [&] (uint64_t at, uint32_t, Events& e) { if (at == 1280) e.note (0, CLAP_EVENT_NOTE_ON, 41); });
         CHECK (near (hz (l, 0.05, 1.45), g5, 0.005));
     }
-    // Other notes still transpose (52 and 35, just beside the pads), and the pads keep the transposition: C5; 52 (-8:
-    // E4); pad 36 (step 1: E4 still); pad 37 (step 2, an octave up: E5); 35 held (-25 from step 2: B3).
+    // The banks (- / + on the MPC): with Run on every key is a step pad, the same sixteen an octave a bank. Seq 1 on
+    // C5 (step 1), C6 (step 2): pad 36 C5; 52 (bank B's pad 1) C6; 68 (C) C7; 84 (D) C8; 20 (below A) C4; 4 (two
+    // below) C3; 61 (bank B's pad 10, Seq 1's step 2 by the pads' mod-8 rows) C7; held to three banks up: 100 (pad
+    // 1) C8 and 127 (pad 12, Seq 1's step 4, C4) C7; 120 (a Seq 2 pad) leaves VCO 1 on C5. Never another step, never
+    // silence.
     {
-        Instance a;
-        a.setup (dronePatch (a));
-        a.render (72000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
-            if (at == 128 * 75) e.note (0, CLAP_EVENT_NOTE_ON, 52);
-            if (at == 128 * 150) e.note (0, CLAP_EVENT_NOTE_OFF, 52);
-            if (at == 128 * 225) e.note (0, CLAP_EVENT_NOTE_ON, 36);
-            if (at == 128 * 300) e.note (0, CLAP_EVENT_NOTE_ON, 37);
-            if (at == 128 * 375) e.midi (0, 0x90, 35, 100);
-        });
-        const double w[5] = { hz (l, 0.05, 0.19), hz (l, 0.22, 0.58), hz (l, 0.62, 0.79), hz (l, 0.82, 0.99), hz (l, 1.02, 1.45) };
-        if (debug) std::printf ("debug pads and notes: %.1f %.1f %.1f %.1f %.1f\n", w[0], w[1], w[2], w[3], w[4]);
-        CHECK (near (w[0], c5, 0.005) && near (w[1], e4, 0.005) && near (w[2], e4, 0.005) && near (w[3], e5, 0.005) && near (w[4], b3, 0.005));
+        struct Bank { int16_t key; double want; };
+        for (const Bank b : { Bank { 36, c5 }, Bank { 52, c6 }, Bank { 68, 4.0 * c5 }, Bank { 84, 8.0 * c5 }, Bank { 20, c4 }, Bank { 4, c4 / 2.0 },
+                              Bank { 61, 4.0 * c5 }, Bank { 100, 8.0 * c5 }, Bank { 127, 8.0 * c4 }, Bank { 120, c5 } })
+        {
+            Instance a;
+            a.setup (dronePatch (a));
+            a.render (48000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+                if (at == 128 * 75) e.note (0, CLAP_EVENT_NOTE_ON, b.key);
+                if (at == 128 * 150) e.note (0, CLAP_EVENT_NOTE_OFF, b.key);
+            });
+            const double before = hz (l, 0.05, 0.19), after = hz (l, 0.25, 0.95);
+            if (debug) std::printf ("debug bank key %d: %.1f then %.1f\n", b.key, before, after);
+            CHECK (near (before, c5, 0.005) && near (after, b.want, 0.005));
+        }
+        // The octave belongs to the pad's step: Next after it moves the sequencer to step 2 (C6) for both 36 and 52,
+        // with no octave left over.
+        std::vector<float> a36, a52;
+        for (int16_t key : { (int16_t) 36, (int16_t) 52 })
+        {
+            Instance a;
+            a.setup (dronePatch (a));
+            a.render (72000, 128, key == 36 ? a36 : a52, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+                if (at == 128 * 75) e.note (0, CLAP_EVENT_NOTE_ON, key);
+                if (at == 128 * 300) a.set (e, "Next", 1.0);
+            });
+        }
+        CHECK (near (hz (a52, 0.25, 0.75), c6, 0.005) && near (hz (a36, 0.25, 0.75), c5, 0.005));
+        CHECK (near (hz (a52, 0.85, 1.45), c6, 0.005) && near (hz (a36, 0.85, 1.45), c6, 0.005));
+    }
+    // Run off: every key plays its own pitch, as before the banks (52, bank B's pad 1, is 16 semitones above 36:
+    // E4 from the drone's C5; 68 G#5; 84 C7; 20 E2), and two keys never play alike.
+    {
+        for (int16_t key : { (int16_t) 36, (int16_t) 52, (int16_t) 68, (int16_t) 84, (int16_t) 20 })
+        {
+            Instance a;
+            a.setup (dronePatch (a, { { "Run", 0.0 } }));
+            a.render (48000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
+                if (at == 128 * 75) e.note (0, CLAP_EVENT_NOTE_ON, key);
+                if (at == 128 * 200) e.note (0, CLAP_EVENT_NOTE_OFF, key);
+            });
+            const double want = c5 * std::pow (2.0, (key - 60) / 12.0);
+            if (debug) std::printf ("debug run off key %d: %.1f (want %.1f)\n", key, hz (l, 0.3, 0.9), want);
+            CHECK (near (hz (l, 0.3, 0.9), want, 0.005) && rms (l, 20000, 2400) > 0.01);
+        }
     }
     // Run off: the pads are notes again (40 is -20, E3; 48 an octave down, C4), held as a gate; switched on, a pad
     // (40, Seq 2's step 1) leaves VCO 1 where the note put it.
@@ -1512,9 +1547,9 @@ void testStepPads()
         if (debug) std::printf ("debug run off: %.1f %.1f %.1f %.1f\n", w[0], w[1], w[2], w[3]);
         CHECK (near (w[0], e3, 0.005) && near (w[1], e3, 0.005) && near (w[2], e3, 0.005) && near (w[3], c4, 0.005));
     }
-    // Gates (EG On, a short VCA decay, stopped). Run off: note 40 holds the EGs while it is down. Run on: note 52 does
-    // too, pad 40 does not (one hit that decays while the key is still down).
-    for (const auto& gate : { std::tuple { 0.0, 40, true }, std::tuple { 1.0, 52, true }, std::tuple { 1.0, 40, false } })
+    // Gates (EG On, a short VCA decay, stopped). Run off: notes 40 and 60 hold the EGs while they are down. Run on:
+    // pads 40 and 60 (bank B) do not (one hit that decays while the key is still down).
+    for (const auto& gate : { std::tuple { 0.0, 40, true }, std::tuple { 0.0, 60, true }, std::tuple { 1.0, 60, false }, std::tuple { 1.0, 40, false } })
     {
         const double run = std::get<0> (gate);
         const int key = std::get<1> (gate);
@@ -1530,7 +1565,7 @@ void testStepPads()
         CHECK (holds ? std::fabs (rms (l, 20000, 2400) - rms (l, 3000, 2400)) < 0.01 : rms (l, 20000, 2400) < 1e-4);
     }
     // On, on, off of one pad (a pad hit again while its off is pending): two hits, each decaying while it is down; its
-    // off ends nothing. Under a held note (60), a pad and its off leave the note's gate held.
+    // off ends nothing. Under a held note (60, played with Run off), a pad and its off leave the note's gate held.
     {
         Instance a;
         a.setup (clickPatch (a, { { "VCA Decay", 0.3 } }));
@@ -1542,22 +1577,23 @@ void testStepPads()
         CHECK (hits.size() == 2 && hits[0] < 1280 + 48 && hits[1] >= 12800 && hits[1] < 12800 + 48);
         CHECK (rms (l, 8000, 2400) < 1e-4 && rms (l, 30000, 2400) < 1e-4);
         Instance b;
-        b.setup (clickPatch (b, { { "VCA Decay", 0.3 } }));
+        b.setup (clickPatch (b, { { "VCA Decay", 0.3 }, { "Run", 0.0 } }));
         b.render (48000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
             if (at == 128 * 10) e.note (0, CLAP_EVENT_NOTE_ON, 60);
+            if (at == 128 * 50) b.set (e, "Run", 1.0);
             if (at == 128 * 100) e.note (0, CLAP_EVENT_NOTE_ON, 37);
             if (at == 128 * 150) e.note (0, CLAP_EVENT_NOTE_OFF, 37), e.midi (0, 0x80, 37, 0), e.note (0, CLAP_EVENT_NOTE_CHOKE, 37);
             if (at == 128 * 300) e.note (0, CLAP_EVENT_NOTE_OFF, 60);
         });
         CHECK (rms (l, 3000, 2400) > 0.1 && std::fabs (rms (l, 30000, 2400) - rms (l, 3000, 2400)) < 0.01 && rms (l, 44000, 2400) < 1e-4);
     }
-    // A choke and a CC 120/123 storm on every channel while a note and a pad are down: all quiet; the next pad is one
-    // hit that decays (nothing held over).
+    // A choke and a CC 120/123 storm on every channel while a note (60, Run off) and a pad are down: all quiet; the
+    // next pad is one hit that decays (nothing held over).
     {
         Instance a;
-        a.setup (clickPatch (a, { { "VCA Decay", 0.3 } }));
+        a.setup (clickPatch (a, { { "VCA Decay", 0.3 }, { "Run", 0.0 } }));
         a.render (72000, 128, l, r, still, [&] (uint64_t at, uint32_t, Events& e) {
-            if (at == 128 * 10) e.note (0, CLAP_EVENT_NOTE_ON, 60), e.note (0, CLAP_EVENT_NOTE_ON, 37);
+            if (at == 128 * 10) e.note (0, CLAP_EVENT_NOTE_ON, 60), a.set (e, "Run", 1.0), e.note (0, CLAP_EVENT_NOTE_ON, 37);
             if (at == 128 * 100)
             {
                 e.note (0, CLAP_EVENT_NOTE_CHOKE, 60), e.note (0, CLAP_EVENT_NOTE_CHOKE, 37);
@@ -1635,6 +1671,39 @@ void testStepPads()
         }
         CHECK (rms (s128, 13001, 4800) > 0.01);
     }
+}
+
+// The drum map hdslaveOS reads from the plug-in's library: in the binary, parsing (16 voices, notes 36-51, named).
+void testPadMap (const char* path)
+{
+    FILE* f = std::fopen (path, "rb");
+    CHECK (f != nullptr);
+    if (! f) return;
+    std::string bytes;
+    char buf[65536];
+    for (size_t n; (n = std::fread (buf, 1, sizeof buf, f)) > 0;)
+        bytes.append (buf, n);
+    std::fclose (f);
+    const size_t at = bytes.find ("{\"pad_layout\":\"drums\"");
+    CHECK (at != std::string::npos);
+    if (at == std::string::npos) return;
+    const std::string json = bytes.substr (at, bytes.find ('\0', at) - at);
+    CHECK (json.find ("\"name\":\"hdslave Necronomicon\"") != std::string::npos);
+    // The voices as Melodee's reader takes them: each level's "name" and "note".
+    int voices = 0, inRange = 0;
+    for (size_t p = json.find ("\"note\":"); p != std::string::npos; p = json.find ("\"note\":", p + 1))
+    {
+        const int k = std::atoi (json.c_str() + p + 7);
+        ++voices;
+        inRange += k == 36 + (voices - 1);
+    }
+    CHECK (voices == 16 && inRange == 16);
+    CHECK (json.find ("S1 Step 1") != std::string::npos && json.find ("S2 Step 4") != std::string::npos);
+    int depth = 0;
+    bool balanced = true;
+    for (char c : json)
+        depth += c == '{' ? 1 : c == '}' ? -1 : 0, balanced = balanced && depth >= 0;
+    CHECK (balanced && depth == 0 && json.back() == '}');
 }
 
 void testExtremes()
@@ -2202,7 +2271,7 @@ void testKeyChoke()
         return silent;
     };
     Instance p;
-    const Values held = clickPatch (p, { { "VCA Decay", 1.0 } });
+    const Values held = clickPatch (p, { { "VCA Decay", 1.0 }, { "Run", 0.0 } }); // Run off: the keys are notes
     CHECK (choked (held, { 60 }, 60));
     CHECK (rms (l, 128 * 50, 2400) > 0.1);
     CHECK (choked (dronePatch (p), {}, 60)); // EG: Hold, no key held: the drone stops
@@ -2248,6 +2317,7 @@ int main (int argc, char** argv)
     testPitch();
     testEnvelopesAndNotes();
     testStepPads();
+    testPadMap (argv[1]);
     testExtremes();
     testVerifiedFixes();
     testKeyChoke();

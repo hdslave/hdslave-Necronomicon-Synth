@@ -27,6 +27,25 @@ const clap_plugin_descriptor descriptor {
     features,
 };
 
+// The pads as hdslaveOS (and Melodee) read them from a plug-in's library: with this, a plug-in track on Necronomicon
+// plays its pads as notes 36-51 (pads A01-A16) whatever the octave, key or scale, names them on the Keys page, and
+// - / + move the bank (B 52-67, C 68-83, D 84-99) instead of the octave. Kept in the binary by padsJson() below.
+[[gnu::used]] const char padMapJson[] =
+    "{\"pad_layout\":\"drums\",\"name\":\"hdslave Necronomicon\",\"levels\":{"
+    "\"p1\":{\"name\":\"S1 Step 1\",\"note\":36},\"p2\":{\"name\":\"S1 Step 2\",\"note\":37},"
+    "\"p3\":{\"name\":\"S1 Step 3\",\"note\":38},\"p4\":{\"name\":\"S1 Step 4\",\"note\":39},"
+    "\"p5\":{\"name\":\"S2 Step 1\",\"note\":40},\"p6\":{\"name\":\"S2 Step 2\",\"note\":41},"
+    "\"p7\":{\"name\":\"S2 Step 3\",\"note\":42},\"p8\":{\"name\":\"S2 Step 4\",\"note\":43},"
+    "\"p9\":{\"name\":\"S1 Step 1\",\"note\":44},\"p10\":{\"name\":\"S1 Step 2\",\"note\":45},"
+    "\"p11\":{\"name\":\"S1 Step 3\",\"note\":46},\"p12\":{\"name\":\"S1 Step 4\",\"note\":47},"
+    "\"p13\":{\"name\":\"S2 Step 1\",\"note\":48},\"p14\":{\"name\":\"S2 Step 2\",\"note\":49},"
+    "\"p15\":{\"name\":\"S2 Step 3\",\"note\":50},\"p16\":{\"name\":\"S2 Step 4\",\"note\":51}}}";
+const char* padsJson()
+{
+    const char* volatile json = padMapJson;
+    return json;
+}
+
 struct Plugin
 {
     clap_plugin clap {};
@@ -453,6 +472,7 @@ bool pluginInit (const clap_plugin* plugin)
         p.applied[i] = paramTable[i].def;
         p.engine.set (paramTable[i].id, paramTable[i].def);
     }
+    (void) padsJson();
     p.hostScreen = static_cast<const melodee_screen_host_t*> (p.host->get_extension (p.host, MELODEE_SCREEN_CLAP_HOST));
     p.hostParams = static_cast<const clap_host_params*> (p.host->get_extension (p.host, CLAP_EXT_PARAMS));
     return true;
