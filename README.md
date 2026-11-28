@@ -19,6 +19,10 @@ Built for the Akai MPC Sample running [Melodee](https://github.com/keremimo/melo
 
 The rhythm generators divide the host clock — playing on the song's grid, stopping on stop, and staying aligned through song jumps. On Melodee 0.7 and hdslaveOS based on it, Necronomicon draws its animated **Liquid Light** screen with four stained-glass rhythm wheels tracking each divisor's phase and sequencer routing in real time.
 
+## hdslave plug-in license
+
+You may use these plug-ins to make, perform, record and sell music, including paid client work, without royalties or credit to hdslave. You may share complete, unchanged official releases for free with their notices intact. Selling the software, including it in a paid product or subscription, or distributing a modified version requires prior written permission from hdslave. Third-party components keep their own licenses. [Full plug-in license](LICENSE.txt).
+
 ## Signal flow
 
 ```
