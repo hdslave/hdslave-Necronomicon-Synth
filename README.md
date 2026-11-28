@@ -8,8 +8,8 @@
     <th width="66%">macOS and Windows · CLAP</th>
   </tr>
   <tr>
-    <td align="center"><a href="docs/necronomicon-screen.gif"><img src="docs/necronomicon-screen.gif" alt="Necronomicon Liquid Light stained-glass rhythm wheels running in hdslaveOS"></a></td>
-    <td align="center"><a href="mac-clap/assets/desktop-preview.gif"><img src="mac-clap/assets/desktop-preview.gif" alt="Necronomicon oscillators, dividers and rhythm wheels during playback"></a></td>
+    <td align="center"><a href="docs/necronomicon-screen.webp"><img src="docs/mpc-loop.webp" alt="Necronomicon Liquid Light stained-glass rhythm wheels running in hdslaveOS"></a></td>
+    <td align="center"><a href="mac-clap/assets/desktop-preview.webp"><img src="mac-clap/assets/desktop-loop.webp" alt="Necronomicon oscillators, dividers and rhythm wheels during playback"></a></td>
   </tr>
 </table>
 
